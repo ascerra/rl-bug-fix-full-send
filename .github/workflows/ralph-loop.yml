@@ -1,0 +1,146 @@
+name: Ralph Loop - Bug Fix Engine
+
+on:
+  workflow_dispatch:
+    inputs:
+      issue_url:
+        description: "GitHub issue URL to process"
+        required: true
+        type: string
+      target_ref:
+        description: "Git ref to start from (default: HEAD of default branch)"
+        required: false
+        type: string
+        default: ""
+      comparison_ref:
+        description: "Git ref containing the human fix (for comparison mode)"
+        required: false
+        type: string
+        default: ""
+      config_override:
+        description: "YAML config overrides (inline)"
+        required: false
+        type: string
+        default: ""
+      llm_provider:
+        description: "LLM provider to use"
+        required: false
+        type: choice
+        options:
+          - gemini
+          - anthropic
+        default: gemini
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: read
+  statuses: write
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  run-ralph-loop:
+    name: Execute Ralph Loop
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout engine
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Parse issue URL
+        id: parse
+        run: |
+          ISSUE_URL="${{ inputs.issue_url }}"
+          # Extract org/repo and issue number from URL
+          # Expected format: https://github.com/ORG/REPO/issues/NUMBER
+          REPO=$(echo "$ISSUE_URL" | sed -n 's|https://github.com/\([^/]*/[^/]*\)/issues/.*|\1|p')
+          ISSUE_NUM=$(echo "$ISSUE_URL" | sed -n 's|.*/issues/\([0-9]*\).*|\1|p')
+          echo "repo=$REPO" >> "$GITHUB_OUTPUT"
+          echo "issue_number=$ISSUE_NUM" >> "$GITHUB_OUTPUT"
+          echo "Targeting repo: $REPO, issue: #$ISSUE_NUM"
+
+      - name: Clone target repository
+        run: |
+          TARGET_REF="${{ inputs.target_ref }}"
+          REPO="${{ steps.parse.outputs.repo }}"
+          git clone "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${REPO}.git" target-repo
+          if [ -n "$TARGET_REF" ]; then
+            cd target-repo && git checkout "$TARGET_REF"
+          fi
+
+      - name: Run Ralph Loop Engine
+        id: loop
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          RL_ISSUE_URL: ${{ inputs.issue_url }}
+          RL_TARGET_REPO: ./target-repo
+          RL_COMPARISON_REF: ${{ inputs.comparison_ref }}
+          RL_CONFIG_OVERRIDE: ${{ inputs.config_override }}
+          RL_LLM_PROVIDER: ${{ inputs.llm_provider }}
+        run: |
+          python -m engine \
+            --issue-url "$RL_ISSUE_URL" \
+            --target-repo "$RL_TARGET_REPO" \
+            --comparison-ref "$RL_COMPARISON_REF" \
+            --provider "$RL_LLM_PROVIDER" \
+            --output-dir ./output
+          echo "status=$(cat ./output/status.txt)" >> "$GITHUB_OUTPUT"
+
+      - name: Generate visual reports
+        if: always()
+        run: |
+          python -m engine.visualization.report_generator \
+            --execution-log ./output/execution.json \
+            --output-dir ./output/reports
+
+      - name: Upload execution artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ralph-loop-execution-${{ github.run_id }}
+          path: |
+            ./output/execution.json
+            ./output/reports/
+            ./output/transcripts/
+            ./output/status.txt
+          retention-days: 30
+
+      - name: Upload visual reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ralph-loop-reports-${{ github.run_id }}
+          path: ./output/reports/
+          retention-days: 30
+
+      - name: Post summary
+        if: always()
+        run: |
+          STATUS="${{ steps.loop.outputs.status }}"
+          echo "## Ralph Loop Execution Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Issue**: ${{ inputs.issue_url }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Status**: ${STATUS:-unknown}" >> "$GITHUB_STEP_SUMMARY"
+          echo "**Provider**: ${{ inputs.llm_provider }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "Visual reports are available in the workflow artifacts." >> "$GITHUB_STEP_SUMMARY"
+          if [ -f ./output/reports/summary.md ]; then
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            cat ./output/reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
