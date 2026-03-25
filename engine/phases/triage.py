@@ -183,15 +183,40 @@ class TriagePhase(Phase):
                 findings=triage,
             )
 
-        if classification in ("feature", "ambiguous"):
+        if classification == "feature":
             return PhaseResult(
                 phase=self.name,
                 success=False,
                 should_continue=False,
                 escalate=True,
-                escalation_reason=(
-                    f"Issue classified as '{classification}' — requires human review"
-                ),
+                escalation_reason="Issue classified as 'feature' — requires human review",
+                findings=triage,
+            )
+
+        if classification == "ambiguous":
+            confidence = triage.get("confidence", 0)
+            if isinstance(confidence, (int, float)) and confidence >= 0.4:
+                self.logger.warn(
+                    f"Ambiguous classification with confidence {confidence} — proceeding as bug"
+                )
+                return PhaseResult(
+                    phase=self.name,
+                    success=True,
+                    should_continue=True,
+                    next_phase="implement",
+                    findings=triage,
+                    artifacts={
+                        "classification": "ambiguous_as_bug",
+                        "confidence": confidence,
+                        "verified_components": validation.get("verified_components", []),
+                    },
+                )
+            return PhaseResult(
+                phase=self.name,
+                success=False,
+                should_continue=False,
+                escalate=True,
+                escalation_reason="Issue classified as 'ambiguous' with low confidence — requires human review",
                 findings=triage,
             )
 

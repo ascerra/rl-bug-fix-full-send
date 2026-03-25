@@ -449,7 +449,8 @@ class TestTriageReflect:
         assert "feature" in result.escalation_reason
 
     @pytest.mark.asyncio
-    async def test_ambiguous_escalates(self):
+    async def test_ambiguous_with_confidence_proceeds(self):
+        """Ambiguous with confidence >= 0.4 proceeds as bug."""
         phase = _make_triage()
         result = await phase.reflect(
             {
@@ -457,6 +458,24 @@ class TestTriageReflect:
                 "classification": "ambiguous",
                 "injection_detected": False,
                 "triage_result": json.loads(_ambiguous_response()),
+            }
+        )
+        assert result.success is True
+        assert result.next_phase == "implement"
+        assert result.artifacts["classification"] == "ambiguous_as_bug"
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_low_confidence_escalates(self):
+        """Ambiguous with confidence < 0.4 still escalates."""
+        phase = _make_triage()
+        low_conf = json.loads(_ambiguous_response())
+        low_conf["confidence"] = 0.2
+        result = await phase.reflect(
+            {
+                "valid": True,
+                "classification": "ambiguous",
+                "injection_detected": False,
+                "triage_result": low_conf,
             }
         )
         assert result.success is False
@@ -538,12 +557,12 @@ async def test_execute_feature_escalates():
 
 
 @pytest.mark.asyncio
-async def test_execute_ambiguous_escalates():
-    """Full execute() with an ambiguous classification → escalate."""
+async def test_execute_ambiguous_proceeds_with_confidence():
+    """Full execute() with an ambiguous classification and decent confidence → proceeds."""
     phase = _make_triage(responses=[_ambiguous_response()])
     result = await phase.execute()
-    assert result.success is False
-    assert result.escalate is True
+    assert result.success is True
+    assert result.artifacts["classification"] == "ambiguous_as_bug"
 
 
 @pytest.mark.asyncio
