@@ -32,8 +32,13 @@ class TriagePhase(Phase):
         """Gather issue data, repo file listing, and existing test files."""
         self.logger.info("Observing: gathering issue data and repo structure")
 
+        issue = dict(self.issue_data)
+        if "title" not in issue or "body" not in issue:
+            issue = await self._fetch_issue(issue.get("url", ""))
+            self.issue_data = issue
+
         observation: dict[str, Any] = {
-            "issue": dict(self.issue_data),
+            "issue": issue,
             "repo_path": self.repo_path,
             "repo_files": "",
             "test_files": "",
@@ -263,6 +268,38 @@ class TriagePhase(Phase):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _fetch_issue(self, issue_url: str) -> dict[str, Any]:
+        """Fetch issue title and body from GitHub using the gh CLI."""
+        import json as _json
+        import re
+
+        issue = {"url": issue_url, "title": "N/A", "body": "N/A"}
+        match = re.search(r"github\.com/([^/]+/[^/]+)/issues/(\d+)", issue_url)
+        if not match:
+            self.logger.warn(f"Could not parse issue URL: {issue_url}")
+            return issue
+
+        repo, number = match.group(1), match.group(2)
+        if not self.tool_executor:
+            return issue
+
+        result = await self.tool_executor.execute(
+            "shell_run",
+            command=f"gh issue view {number} --repo {repo} --json title,body",
+        )
+        if result.get("success") and result.get("stdout", "").strip():
+            try:
+                data = _json.loads(result["stdout"])
+                issue["title"] = data.get("title", "N/A")
+                issue["body"] = data.get("body", "N/A")
+                self.logger.info(f"Fetched issue: {issue['title'][:80]}")
+            except _json.JSONDecodeError:
+                self.logger.warn("Failed to parse gh issue JSON output")
+        else:
+            self.logger.warn(f"Failed to fetch issue from GitHub: {result.get('stderr', '')}")
+
+        return issue
 
     async def _verify_components(
         self,
