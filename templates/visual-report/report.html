@@ -1,0 +1,468 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ralph Loop Report — {{ report.execution_id[:8] }}</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface-hover: #1c2333;
+    --border: #30363d;
+    --text: #e6edf3;
+    --text-muted: #8b949e;
+    --accent: #58a6ff;
+    --success: #3fb950;
+    --failure: #f85149;
+    --warning: #d29922;
+    --escalated: #bc8cff;
+    --timeout: #d29922;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.6;
+    padding: 2rem;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  h1, h2, h3 { font-weight: 600; }
+  h1 { font-size: 1.75rem; margin-bottom: 0.5rem; }
+  h2 { font-size: 1.25rem; margin: 2rem 0 1rem; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  h3 { font-size: 1rem; margin: 1rem 0 0.5rem; }
+
+  .header { display: flex; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; gap: 1rem; margin-bottom: 2rem; }
+  .header-left h1 { display: flex; align-items: center; gap: 0.5rem; }
+  .header-meta { color: var(--text-muted); font-size: 0.85rem; }
+
+  .badge {
+    display: inline-block;
+    padding: 0.25rem 0.75rem;
+    border-radius: 2rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+  .status-success { background: rgba(63,185,80,0.15); color: var(--success); border: 1px solid rgba(63,185,80,0.3); }
+  .status-failure { background: rgba(248,81,73,0.15); color: var(--failure); border: 1px solid rgba(248,81,73,0.3); }
+  .status-escalated { background: rgba(188,140,255,0.15); color: var(--escalated); border: 1px solid rgba(188,140,255,0.3); }
+  .status-timeout { background: rgba(210,153,34,0.15); color: var(--timeout); border: 1px solid rgba(210,153,34,0.3); }
+  .status-unknown { background: rgba(139,148,158,0.15); color: var(--text-muted); border: 1px solid rgba(139,148,158,0.3); }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+  }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 1rem; }
+
+  .metric-card { text-align: center; }
+  .metric-value { font-size: 2rem; font-weight: 700; color: var(--accent); }
+  .metric-label { font-size: 0.8rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 0.9rem; }
+  th { text-align: left; color: var(--text-muted); font-weight: 600; padding: 0.5rem 0.75rem; border-bottom: 2px solid var(--border); }
+  td { padding: 0.5rem 0.75rem; border-bottom: 1px solid var(--border); vertical-align: top; }
+  tr:hover td { background: var(--surface-hover); }
+  .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; font-size: 0.85em; }
+
+  .timeline-item {
+    position: relative;
+    padding: 0.75rem 1rem 0.75rem 2rem;
+    border-left: 2px solid var(--border);
+    margin-left: 0.5rem;
+  }
+  .timeline-item::before {
+    content: "";
+    position: absolute;
+    left: -5px;
+    top: 1.1rem;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    border: 2px solid var(--bg);
+  }
+  .timeline-item.success::before { background: var(--success); }
+  .timeline-item.failure::before { background: var(--failure); }
+  .timeline-item.escalated::before { background: var(--escalated); }
+
+  .timeline-phase { font-weight: 600; text-transform: uppercase; font-size: 0.75rem; letter-spacing: 0.05em; color: var(--accent); }
+  .timeline-detail { color: var(--text-muted); font-size: 0.85rem; }
+  .timeline-time { color: var(--text-muted); font-size: 0.75rem; }
+
+  details { margin-bottom: 0.5rem; }
+  details > summary {
+    cursor: pointer;
+    padding: 0.5rem 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    font-size: 0.9rem;
+    list-style: none;
+  }
+  details > summary::before { content: "+ "; font-weight: bold; color: var(--text-muted); }
+  details[open] > summary::before { content: "- "; }
+  details > .detail-content { padding: 0.75rem; border: 1px solid var(--border); border-top: 0; border-radius: 0 0 4px 4px; background: var(--surface); font-size: 0.85rem; }
+
+  pre {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.75rem;
+    overflow-x: auto;
+    font-size: 0.8rem;
+    line-height: 1.5;
+    color: var(--text-muted);
+  }
+
+  .errors-list { list-style: none; }
+  .errors-list li { padding: 0.5rem 0.75rem; border-left: 3px solid var(--failure); margin-bottom: 0.5rem; background: rgba(248,81,73,0.05); border-radius: 0 4px 4px 0; }
+
+  .empty-state { text-align: center; color: var(--text-muted); padding: 2rem; font-style: italic; }
+
+  .action-type { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 3px; font-size: 0.75rem; font-weight: 600; }
+  .action-type-llm_query { background: rgba(88,166,255,0.15); color: var(--accent); }
+  .action-type-tool_execution { background: rgba(63,185,80,0.15); color: var(--success); }
+  .action-type-escalation { background: rgba(248,81,73,0.15); color: var(--failure); }
+  .action-type-default { background: rgba(139,148,158,0.15); color: var(--text-muted); }
+
+  footer { margin-top: 3rem; padding-top: 1rem; border-top: 1px solid var(--border); color: var(--text-muted); font-size: 0.8rem; text-align: center; }
+
+  /* Decision Tree */
+  .tree-container { overflow-x: auto; min-height: 200px; }
+  .tree-container svg { display: block; }
+  .tree-detail-panel {
+    display: none;
+    margin-top: 1rem;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 1rem 1.25rem;
+    max-height: 400px;
+    overflow-y: auto;
+  }
+  .tree-detail-panel h3 { margin-bottom: 0.5rem; }
+  .tree-detail-panel pre { max-height: 280px; overflow: auto; }
+
+  /* Comparison Report */
+  .comparison-header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
+  .comparison-analysis { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.75rem; line-height: 1.7; color: var(--text-muted); white-space: pre-wrap; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <h1>Ralph Loop Execution Report</h1>
+    <div class="header-meta">
+      Execution <span class="mono">{{ report.execution_id[:12] or 'N/A' }}</span>
+      {% if report.trigger.get('source_url') %}
+       | Issue: <a href="{{ report.trigger.source_url }}">{{ report.trigger.source_url }}</a>
+      {% endif %}
+    </div>
+  </div>
+  <div>
+    <span class="badge {{ report.status|status_color }}">{{ report.status|status_icon }}</span>
+  </div>
+</div>
+
+<!-- Metrics Overview -->
+<div class="card-grid">
+  <div class="card metric-card">
+    <div class="metric-value">{{ report.total_iterations }}</div>
+    <div class="metric-label">Iterations</div>
+  </div>
+  <div class="card metric-card">
+    <div class="metric-value">{{ report.metrics.get('total_llm_calls', 0) }}</div>
+    <div class="metric-label">LLM Calls</div>
+  </div>
+  <div class="card metric-card">
+    <div class="metric-value">{{ report.metrics.get('total_tool_executions', 0) }}</div>
+    <div class="metric-label">Tool Executions</div>
+  </div>
+  <div class="card metric-card">
+    <div class="metric-value">{{ report.metrics.get('total_tokens_in', 0) + report.metrics.get('total_tokens_out', 0) }}</div>
+    <div class="metric-label">Total Tokens</div>
+  </div>
+</div>
+
+<!-- Phase Summary -->
+<h2>Phase Summary</h2>
+{% if report.phases_summary %}
+<div class="card">
+  <table>
+    <thead>
+      <tr>
+        <th>Phase</th>
+        <th>Result</th>
+        <th>Iterations</th>
+        <th>Duration</th>
+        <th>LLM Calls</th>
+        <th>Tool Calls</th>
+        <th>Total Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for phase in report.phases_summary %}
+      <tr>
+        <td><strong>{{ phase.phase }}</strong></td>
+        <td>
+          {% if phase.successful %}
+          <span class="badge status-success">PASS</span>
+          {% else %}
+          <span class="badge status-failure">FAIL</span>
+          {% endif %}
+        </td>
+        <td>{{ phase.iterations }}</td>
+        <td>{{ phase.duration_ms|format_duration }}</td>
+        <td>{{ phase.llm_call_count }}</td>
+        <td>{{ phase.tool_call_count }}</td>
+        <td>{{ phase.action_count }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="card empty-state">No phases were executed.</div>
+{% endif %}
+
+<!-- Decision Tree -->
+<h2>Decision Tree</h2>
+<div class="card">
+  <div id="decision-tree-container" class="tree-container"></div>
+  <div id="decision-tree-detail" class="tree-detail-panel"></div>
+</div>
+
+<!-- Action Map -->
+<h2>Action Map</h2>
+<div class="card">
+  <div id="action-map-container" class="tree-container"></div>
+  <div id="action-map-detail" class="tree-detail-panel"></div>
+</div>
+
+<!-- Comparison Report -->
+{% if report.comparison.get('enabled') %}
+<h2>Comparison: Agent vs Human Fix</h2>
+<div class="card">
+  <div class="comparison-header">
+    <span class="badge status-unknown">COMPARISON MODE</span>
+    {% if report.comparison.get('comparison_ref') %}
+    <span class="header-meta">Human ref: <span class="mono">{{ report.comparison.comparison_ref[:12] }}</span></span>
+    {% endif %}
+  </div>
+
+  <!-- Similarity Score -->
+  <div class="card-grid" style="margin-top: 1rem;">
+    <div class="card metric-card">
+      <div class="metric-value">{{ "%.0f"|format(report.comparison.get('metrics', {}).get('similarity_score', 0) * 100) }}%</div>
+      <div class="metric-label">Similarity Score</div>
+    </div>
+    <div class="card metric-card">
+      <div class="metric-value">{{ "%.0f"|format(report.comparison.get('metrics', {}).get('file_overlap', 0) * 100) }}%</div>
+      <div class="metric-label">File Overlap</div>
+    </div>
+    <div class="card metric-card">
+      <div class="metric-value">{{ report.comparison.get('metrics', {}).get('files_both', [])|length }}</div>
+      <div class="metric-label">Common Files</div>
+    </div>
+    <div class="card metric-card">
+      <div class="metric-value">{{ report.comparison.get('metrics', {}).get('complexity_delta', 0) }}</div>
+      <div class="metric-label">Complexity Delta</div>
+    </div>
+  </div>
+
+  <!-- File Overlap -->
+  <h3>Files Changed</h3>
+  <table>
+    <thead>
+      <tr><th>File</th><th>Agent</th><th>Human</th></tr>
+    </thead>
+    <tbody>
+      {% for f in report.comparison.get('metrics', {}).get('files_both', []) %}
+      <tr><td class="mono">{{ f }}</td><td><span class="badge status-success">YES</span></td><td><span class="badge status-success">YES</span></td></tr>
+      {% endfor %}
+      {% for f in report.comparison.get('metrics', {}).get('files_only_agent', []) %}
+      <tr><td class="mono">{{ f }}</td><td><span class="badge status-success">YES</span></td><td><span class="badge status-failure">NO</span></td></tr>
+      {% endfor %}
+      {% for f in report.comparison.get('metrics', {}).get('files_only_human', []) %}
+      <tr><td class="mono">{{ f }}</td><td><span class="badge status-failure">NO</span></td><td><span class="badge status-success">YES</span></td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+
+  <!-- Line Metrics -->
+  <h3>Line Changes</h3>
+  <table>
+    <thead><tr><th></th><th>Lines Added</th><th>Lines Removed</th><th>Total Files</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Agent</strong></td>
+        <td>+{{ report.comparison.get('agent_summary', {}).get('total_lines_added', 0) }}</td>
+        <td>-{{ report.comparison.get('agent_summary', {}).get('total_lines_removed', 0) }}</td>
+        <td>{{ report.comparison.get('agent_summary', {}).get('total_files', 0) }}</td>
+      </tr>
+      <tr>
+        <td><strong>Human</strong></td>
+        <td>+{{ report.comparison.get('human_summary', {}).get('total_lines_added', 0) }}</td>
+        <td>-{{ report.comparison.get('human_summary', {}).get('total_lines_removed', 0) }}</td>
+        <td>{{ report.comparison.get('human_summary', {}).get('total_files', 0) }}</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- AI Analysis -->
+  {% if report.comparison.get('analysis') %}
+  <h3>Analysis</h3>
+  <div class="comparison-analysis">{{ report.comparison.analysis }}</div>
+  {% endif %}
+
+  <!-- Test Comparison -->
+  {% if report.comparison.get('test_comparison') %}
+  <h3>Test Results</h3>
+  <table>
+    <thead><tr><th>Metric</th><th>Value</th></tr></thead>
+    <tbody>
+      {% for key, val in report.comparison.test_comparison.items() %}
+      <tr><td>{{ key }}</td><td>{{ val }}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+
+  <!-- Raw Diffs -->
+  {% if report.comparison.get('agent_diff') %}
+  <details>
+    <summary>Agent Diff</summary>
+    <div class="detail-content"><pre>{{ report.comparison.agent_diff }}</pre></div>
+  </details>
+  {% endif %}
+  {% if report.comparison.get('human_diff') %}
+  <details>
+    <summary>Human Diff</summary>
+    <div class="detail-content"><pre>{{ report.comparison.human_diff }}</pre></div>
+  </details>
+  {% endif %}
+</div>
+{% endif %}
+
+<!-- Iteration Timeline -->
+<h2>Iteration Timeline</h2>
+{% if report.iterations %}
+<div class="card">
+  {% for it in report.iterations %}
+  <div class="timeline-item {{ 'success' if it.get('result', {}).get('success') else ('escalated' if it.get('result', {}).get('escalate') else 'failure') }}">
+    <div class="timeline-phase">{{ it.phase }} — iteration {{ it.number }}</div>
+    <div class="timeline-detail">
+      {% if it.get('result', {}).get('success') %}Completed successfully{% elif it.get('result', {}).get('escalate') %}Escalated{% elif it.get('result', {}).get('should_continue') %}Failed (retryable){% else %}Failed{% endif %}
+      {% if it.get('result', {}).get('next_phase') %} &rarr; {{ it.result.next_phase }}{% endif %}
+    </div>
+    <div class="timeline-time">
+      {{ it.get('started_at', '')[:19] }}
+      {% if it.get('duration_ms') %} | {{ it.duration_ms|format_duration }}{% endif %}
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card empty-state">No iterations recorded.</div>
+{% endif %}
+
+<!-- Actions Log -->
+<h2>Actions Log ({{ report.actions|length }})</h2>
+{% if report.actions %}
+{% for action in report.actions %}
+<details>
+  <summary>
+    <span class="action-type action-type-{{ action.get('action_type', 'default') }}">{{ action.get('action_type', 'unknown') }}</span>
+    {{ action.get('input', {}).get('description', 'No description')[:120] }}
+    <span class="timeline-time">— iter {{ action.get('iteration', '?') }} / {{ action.get('phase', '?') }}</span>
+  </summary>
+  <div class="detail-content">
+    <h3>Input</h3>
+    <pre>{{ action.get('input', {})|to_json }}</pre>
+    <h3>Output</h3>
+    <pre>{{ action.get('output', {})|to_json }}</pre>
+    {% if action.get('llm_context') %}
+    <h3>LLM Context</h3>
+    <pre>{{ action.llm_context|to_json }}</pre>
+    {% endif %}
+    {% if action.get('duration_ms') %}
+    <p class="timeline-time">Duration: {{ action.duration_ms|format_duration }}</p>
+    {% endif %}
+  </div>
+</details>
+{% endfor %}
+{% else %}
+<div class="card empty-state">No actions recorded.</div>
+{% endif %}
+
+<!-- Errors -->
+{% if report.errors %}
+<h2>Errors</h2>
+<div class="card">
+  <ul class="errors-list">
+    {% for error in report.errors %}
+    <li>{{ error }}</li>
+    {% endfor %}
+  </ul>
+</div>
+{% endif %}
+
+<!-- Configuration -->
+<details>
+  <summary>Configuration</summary>
+  <div class="detail-content">
+    <pre>{{ report.config|to_json }}</pre>
+  </div>
+</details>
+
+<!-- Raw Execution Record -->
+<details>
+  <summary>Full Execution Record (JSON)</summary>
+  <div class="detail-content">
+    <pre>{{ report.to_dict()|to_json }}</pre>
+  </div>
+</details>
+
+<footer>
+  Generated by Ralph Loop Engine | Execution {{ report.execution_id[:12] or 'N/A' }}
+  {% if report.started_at %} | Started {{ report.started_at[:19] }}{% endif %}
+  {% if report.completed_at %} | Completed {{ report.completed_at[:19] }}{% endif %}
+</footer>
+
+<script src="https://d3js.org/d3.v7.min.js"></script>
+<script>
+{% autoescape false %}
+{% include 'decision-tree.js' %}
+{% endautoescape %}
+</script>
+<script>
+{% autoescape false %}
+{% include 'action-map.js' %}
+{% endautoescape %}
+</script>
+<script>
+(function() {
+  var treeData = {{ report.decision_tree | to_json_safe | safe }};
+  if (treeData && typeof renderDecisionTree === 'function') {
+    renderDecisionTree(treeData, 'decision-tree-container', 'decision-tree-detail');
+  }
+  var mapData = {{ report.action_map | to_json_safe | safe }};
+  if (mapData && typeof renderActionMap === 'function') {
+    renderActionMap(mapData, 'action-map-container', 'action-map-detail');
+  }
+})();
+</script>
+
+</body>
+</html>

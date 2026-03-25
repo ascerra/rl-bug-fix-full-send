@@ -6,7 +6,10 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from engine.secrets import SecretRedactor
 
 
 @dataclass
@@ -50,10 +53,11 @@ class ActionRecord:
 class Tracer:
     """Records actions and builds the execution trace."""
 
-    def __init__(self):
+    def __init__(self, redactor: SecretRedactor | None = None):
         self._actions: list[ActionRecord] = []
         self._current_phase: str = "init"
         self._current_iteration: int = 0
+        self._redactor = redactor
 
     def set_phase(self, phase: str) -> None:
         self._current_phase = phase
@@ -72,6 +76,12 @@ class Tracer:
         llm_context: dict[str, Any] | None = None,
         provenance: dict[str, Any] | None = None,
     ) -> ActionRecord:
+        if self._redactor:
+            description = self._redactor.redact(description)
+            if input_context:
+                input_context = self._redactor.redact_dict(input_context)
+            if output_data:
+                output_data = self._redactor.redact_dict(output_data)
         record = ActionRecord(
             iteration=self._current_iteration,
             phase=self._current_phase,

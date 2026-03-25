@@ -37,19 +37,37 @@ rl-bug-fix-full-send/
 ├── IMPLEMENTATION-PLAN.md     # Phased build plan
 ├── prompt.md                  # Meta ralph loop instruction file
 ├── .github/workflows/         # GitHub Actions workflows
-│   └── ralph-loop.yml         # Main engine workflow
+│   ├── ralph-loop.yml         # Main engine workflow
+│   └── quality-scan.yml       # Weekly background quality scan
 ├── engine/                    # Python engine package
 │   ├── __main__.py           # CLI entry point
 │   ├── config.py             # Configuration system
 │   ├── loop.py               # Ralph Loop core engine
 │   ├── phases/               # Phase implementations
-│   │   └── base.py           # Base phase class
+│   │   ├── base.py           # Base phase class
+│   │   ├── prompt_loader.py  # Jinja2 prompt template loading
+│   │   ├── triage.py         # Triage phase (classify, verify, reproduce)
+│   │   ├── implement.py      # Implementation phase (fix, test, lint)
+│   │   ├── review.py         # Review phase (correctness, intent, security, scope)
+│   │   └── validate.py       # Validation phase (test, lint, minimal diff, PR)
+│   ├── secrets.py            # Secret management and redaction
+│   ├── golden_principles.py  # SPEC §7 enforcement (AST-based linter)
+│   ├── quality_scanner.py    # Background quality scanner (periodic scans)
 │   ├── integrations/         # External system adapters
-│   │   └── llm.py            # LLM provider abstraction
+│   │   ├── llm.py            # LLM provider abstraction
+│   │   ├── github.py         # GitHub REST API adapter (IntegrationAdapter)
+│   │   ├── slack.py          # Slack Web API adapter (IntegrationAdapter)
+│   │   ├── jira.py           # Jira REST API adapter (IntegrationAdapter)
+│   │   └── discovery.py      # Integration discovery service (FR-4.8)
 │   ├── observability/        # Logging, tracing, metrics
 │   │   ├── logger.py         # Structured JSON logger
 │   │   ├── tracer.py         # Action tracing
 │   │   └── metrics.py        # Metrics collection
+│   ├── tools/                # Sandboxed tool execution
+│   │   ├── executor.py       # ToolExecutor + 7 tools
+│   │   └── extraction.py     # Deterministic tool extraction from LLM patterns
+│   ├── workflow/             # GitHub Actions self-monitoring
+│   │   └── monitor.py        # WorkflowMonitor + health checks
 │   └── visualization/        # Report generation
 ├── templates/
 │   ├── prompts/              # Phase-specific LLM prompts
@@ -102,6 +120,9 @@ To run the engine in GitHub Actions, you need these repository secrets:
 | `GEMINI_API_KEY` | Yes | Google Gemini API key |
 | `GH_PAT` | Yes | GitHub Personal Access Token with `repo` scope |
 | `ANTHROPIC_API_KEY` | No | Anthropic API key (fallback) |
+| `SLACK_BOT_TOKEN` | No | Slack bot token for notifications and channel reading |
+| `JIRA_API_TOKEN` | No | Jira API token (Cloud) or PAT (Data Center) |
+| `JIRA_USER_EMAIL` | No | Jira user email (required for Cloud basic auth) |
 
 Then trigger the workflow:
 1. Go to Actions → "Ralph Loop - Bug Fix Engine"
@@ -164,6 +185,55 @@ make progress
 open progress/index.html   # macOS
 xdg-open progress/index.html  # Linux
 ```
+
+## Current Build Status
+
+**Phase 0: Foundation** — Complete (all sub-phases 0.1–0.5 done)
+**Phase 1: Core Loop Engine** — Complete (all sub-phases 1.1–1.6 done)
+**Phase 2: GitHub Actions Integration** — Complete (all sub-phases 2.1–2.4 done)
+**Phase 3: Visualization and Reporting** — Complete (all sub-phases 3.1–3.5 done)
+**Phase 4: Integration Layer** — Complete (all sub-phases 4.1–4.4 done)
+**Phase 5: Hardening and Testing** — Complete (all sub-phases 5.1–5.4 done)
+**Phase 6: Self-Improvement Infrastructure** — Complete (all sub-phases 6.1–6.3 done)
+
+| Component | Status | Module |
+|-----------|--------|--------|
+| Package setup | ✅ | `pyproject.toml`, `Makefile`, `ruff.toml` |
+| LLM provider abstraction | ✅ | `engine/integrations/llm.py` |
+| Structured logging & tracing | ✅ | `engine/observability/` |
+| Configuration system | ✅ | `engine/config.py` — includes per-phase config (`PhasesConfig`) |
+| Tool executor | ✅ | `engine/tools/executor.py` |
+| Loop orchestrator | ✅ | `engine/loop.py` — phase registry, dispatch, transitions, escalation |
+| Phase framework | ✅ | `engine/phases/base.py`, `engine/phases/prompt_loader.py` — prompt loading, tool sets, config wiring |
+| Triage phase | ✅ | `engine/phases/triage.py` — classify, verify components, attempt reproduction |
+| Implementation phase | ✅ | `engine/phases/implement.py` — analyze code, generate fix, inner iteration loop, test/lint |
+| Review phase | ✅ | `engine/phases/review.py` — independent review: correctness, intent, security, scope |
+| Validation phase | ✅ | `engine/phases/validate.py` — full test suite, CI checks, minimal diff, PR creation |
+| GH Actions workflow | ✅ | `.github/workflows/ralph-loop.yml` — workflow_dispatch, config overrides, artifact upload |
+| Self-monitoring | ✅ | `engine/workflow/monitor.py` — CI health checks, step failure detection, workflow context |
+| Secret management | ✅ | `engine/secrets.py` — `SecretManager` + `SecretRedactor`, env var validation, redaction in logs/traces/tools |
+| Fork & rollback script | ✅ | `scripts/setup-fork.sh` — fork repo, rollback to pre-fix commit, JSON summary output |
+| CLI entry point | ✅ | `engine/__main__.py` — `--config-override` inline YAML, `--config` file, secret validation, full arg wiring |
+| Report generator | ✅ | `engine/visualization/report_generator.py` — reads execution.json, produces self-contained HTML via Jinja2 |
+| Decision tree visualization | ✅ | `engine/visualization/decision_tree.py` — transforms execution log into interactive D3.js tree |
+| Action map visualization | ✅ | `engine/visualization/action_map.py` — layered phase map with D3.js, data flow edges, token-sized nodes |
+| Comparison report | ✅ | `engine/visualization/comparison.py` — side-by-side diff, file overlap, similarity metrics, AI analysis |
+| Report publishing | ✅ | `engine/visualization/publisher.py` — `ReportPublisher` + CLI, summary.md, artifact manifest, GitHub Pages deployment |
+| Integration adapter protocol | ✅ | `engine/integrations/__init__.py` — `IntegrationAdapter` protocol with discover/read/write/search |
+| GitHub integration (enhanced) | ✅ | `engine/integrations/github.py` — `GitHubAdapter`: issues, PRs, comments, labels, CI status, commit signing |
+| Slack integration | ✅ | `engine/integrations/slack.py` — `SlackAdapter`: notifications, channel history, injection guards |
+| Jira integration | ✅ | `engine/integrations/jira.py` — `JiraAdapter`: read issues, post comments, transitions, JQL search, injection guards |
+| Discovery service | ✅ | `engine/integrations/discovery.py` — `DiscoveryService`: enumerate integrations, probe auth, LLM catalog |
+| Integrations config | ✅ | `engine/config.py` — `IntegrationsConfig` with GitHub, Slack, Jira sub-configs + YAML loading |
+| Prompt injection testing | ✅ | `tests/test_prompt_injection.py` — 127 tests: payload catalog, delimiter wrapping, escape containment, system prompt isolation, integration guards, phase tool restrictions, fail-closed, zero-trust, regression vectors |
+| Loop behavior testing | ✅ | `tests/test_loop.py` — 55 tests: iteration cap enforcement (boundary, retries, backtrack), time budget enforcement (monkeypatched time, mid-loop expiry), escalation behavior (all paths, context recording, status values), phase validation independence (per-phase tool filtering, prior results, executor isolation) |
+| End-to-end testing | ✅ | `tests/test_e2e.py` — 46 tests: 3 simulated Konflux bugs (Go nil pointer, Python import, YAML typo), full pipeline, comparison mode, metrics/observability, report generation, robustness, cross-scenario quality |
+| Security audit | ✅ | `tests/test_security_audit.py` — 59 tests: commit signing verification, provenance recording (all phases), secrets never in logs/artifacts, untrusted content separation in all LLM calls, cross-cutting security properties |
+| Golden principles enforcement | ✅ | `engine/golden_principles.py` — AST-based static analyzer: P1 logging, P3 untrusted separation, P5 iteration bounds, P8 provenance, P9 report publishing, P10 config usage. `make principles` CI gate |
+| Deterministic tool extraction | ✅ | `engine/tools/extraction.py` — `PatternDetector` + `ProposalGenerator`: scans execution records for repeated LLM patterns, proposes deterministic replacements (5 categories + caching fallback). CLI: `python -m engine.tools.extraction` |
+| Background quality scanner | ✅ | `engine/quality_scanner.py` — `BackgroundQualityScanner`: periodic scans combining golden principles, extraction proposals, code metrics. Auto-generates refactoring PR bodies. Weekly cron workflow. CLI: `python -m engine.quality_scanner` |
+
+**1533 tests passing**, lint clean, golden principles PASS.
 
 ## Design Principles
 

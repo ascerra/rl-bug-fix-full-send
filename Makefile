@@ -1,4 +1,4 @@
-.PHONY: lint test fmt check run clean progress
+.PHONY: lint test fmt check run clean progress ralph principles quality-scan
 
 lint:
 	uvx ruff check engine/ tests/
@@ -11,13 +11,22 @@ fmt:
 test:
 	python -m pytest tests/ -v
 
-check: lint test
+principles:
+	python -m engine.golden_principles engine
+
+check: lint test principles
 
 run:
 	python -m engine $(ARGS)
 
 progress:
 	python scripts/gen-progress.py
+
+ralph:
+	./scripts/run-ralph-loop.sh
+
+quality-scan:
+	python -m engine.quality_scanner engine
 
 clean:
 	rm -rf output/ .pytest_cache/ __pycache__/

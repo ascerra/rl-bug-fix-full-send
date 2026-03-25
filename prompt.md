@@ -22,4 +22,5 @@ After you finish the implementation for this run:
    - **Issues hit**: blockers, ambiguities, things that failed before working
    - **Next focus**: the single highest-priority item for the next run
 4. **Run `python scripts/gen-progress.py`** — regenerates the progress dashboard.
-5. **Final message**: list **what you shipped**, **test result**, and **next focus**.
+5. **If ALL items in `IMPLEMENTATION-PLAN.md` are now ✅**: write `{"ralphComplete": true}` to `progress/status.json`.
+6. **Final message**: list **what you shipped**, **test result**, and **next focus**.

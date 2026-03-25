@@ -1,0 +1,143 @@
+name: Background Quality Scan
+
+on:
+  schedule:
+    # Weekly on Monday at 06:00 UTC
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+    inputs:
+      create_issue:
+        description: "Create a GitHub issue if violations are found"
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  issues: write
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  quality-scan:
+    name: Scan Engine Quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Run quality scan
+        id: scan
+        run: |
+          python -m engine.quality_scanner engine \
+            --output scan-report.json
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+
+      - name: Check for critical findings
+        id: check
+        if: always()
+        run: |
+          if [ -f scan-report.json ]; then
+            HAS_CRITICAL=$(python -c "
+          import json, sys
+          report = json.load(open('scan-report.json'))
+          print('true' if report.get('has_critical') else 'false')
+          ")
+            FINDING_COUNT=$(python -c "
+          import json
+          report = json.load(open('scan-report.json'))
+          print(len(report.get('findings', [])))
+          ")
+            PROPOSAL_COUNT=$(python -c "
+          import json
+          report = json.load(open('scan-report.json'))
+          print(len(report.get('extraction_proposals', [])))
+          ")
+            echo "has_critical=$HAS_CRITICAL" >> "$GITHUB_OUTPUT"
+            echo "finding_count=$FINDING_COUNT" >> "$GITHUB_OUTPUT"
+            echo "proposal_count=$PROPOSAL_COUNT" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_critical=false" >> "$GITHUB_OUTPUT"
+            echo "finding_count=0" >> "$GITHUB_OUTPUT"
+            echo "proposal_count=0" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Upload scan report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: quality-scan-report-${{ github.run_id }}
+          path: scan-report.json
+          retention-days: 90
+          if-no-files-found: warn
+
+      - name: Post summary
+        if: always()
+        run: |
+          {
+            echo "## Background Quality Scan"
+            echo ""
+            echo "| Metric | Value |"
+            echo "|--------|-------|"
+            echo "| **Findings** | ${{ steps.check.outputs.finding_count }} |"
+            echo "| **Critical** | ${{ steps.check.outputs.has_critical }} |"
+            echo "| **Extraction proposals** | ${{ steps.check.outputs.proposal_count }} |"
+            echo ""
+            if [ -f scan-report.json ]; then
+              echo '```json'
+              python -c "
+          import json
+          report = json.load(open('scan-report.json'))
+          print(json.dumps({
+              'summary': report.get('summary', ''),
+              'has_critical': report.get('has_critical', False),
+              'code_metrics': report.get('code_metrics', {}),
+              'principles_result': report.get('principles_result', {}),
+          }, indent=2))
+          "
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create issue on critical findings
+        if: >-
+          always() &&
+          steps.check.outputs.has_critical == 'true' &&
+          (github.event_name == 'schedule' || inputs.create_issue == true)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          BODY=$(python -c "
+          import json
+          from engine.quality_scanner import build_refactoring_pr_body, ScanReport, ScanFinding, CodeMetrics
+          raw = json.load(open('scan-report.json'))
+          report = ScanReport(
+              timestamp=raw.get('timestamp', ''),
+              engine_path=raw.get('engine_path', ''),
+              findings=[ScanFinding(**f) for f in raw.get('findings', [])],
+              principles_result=raw.get('principles_result', {}),
+              extraction_proposals=raw.get('extraction_proposals', []),
+              code_metrics=CodeMetrics(**raw.get('code_metrics', {})),
+              execution_records_scanned=raw.get('execution_records_scanned', 0),
+          )
+          print(build_refactoring_pr_body(report))
+          ")
+
+          gh issue create \
+            --title "Quality Scan: Critical violations found ($(date +%Y-%m-%d))" \
+            --body "$BODY" \
+            --label "quality,automated"

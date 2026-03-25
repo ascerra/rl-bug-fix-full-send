@@ -22,6 +22,11 @@ on:
         required: false
         type: string
         default: ""
+      fork_repo:
+        description: "Fork repo for PR branch (e.g. ascerra/build-definitions). If set, pushes fix branch here and creates cross-fork PR against the upstream."
+        required: false
+        type: string
+        default: ""
       llm_provider:
         description: "LLM provider to use"
         required: false
@@ -77,10 +82,18 @@ jobs:
         run: |
           TARGET_REF="${{ inputs.target_ref }}"
           REPO="${{ steps.parse.outputs.repo }}"
+          FORK="${{ inputs.fork_repo }}"
           git clone "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${REPO}.git" target-repo
+          cd target-repo
           if [ -n "$TARGET_REF" ]; then
-            cd target-repo && git checkout "$TARGET_REF"
+            git checkout "$TARGET_REF"
           fi
+          if [ -n "$FORK" ]; then
+            git remote set-url --push origin "https://x-access-token:${{ secrets.GH_PAT }}@github.com/${FORK}.git"
+            echo "Push URL configured to fork: ${FORK}"
+          fi
+          git config user.email "rl-engine@ascerra.dev"
+          git config user.name "RL Bug Fix Engine"
 
       - name: Run Ralph Loop Engine
         id: loop
@@ -88,11 +101,13 @@ jobs:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GH_PAT }}
+          GH_PAT: ${{ secrets.GH_PAT }}
           RL_ISSUE_URL: ${{ inputs.issue_url }}
           RL_TARGET_REPO: ./target-repo
           RL_COMPARISON_REF: ${{ inputs.comparison_ref }}
           RL_CONFIG_OVERRIDE: ${{ inputs.config_override }}
           RL_LLM_PROVIDER: ${{ inputs.llm_provider }}
+          RL_FORK_REPO: ${{ inputs.fork_repo }}
         run: |
           python -m engine \
             --issue-url "$RL_ISSUE_URL" \

@@ -7,7 +7,10 @@ import sys
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from engine.secrets import SecretRedactor
 
 
 class StructuredLogger:
@@ -17,12 +20,14 @@ class StructuredLogger:
         self,
         execution_id: str | None = None,
         output_path: str | Path | None = None,
+        redactor: SecretRedactor | None = None,
     ):
         self.execution_id = execution_id or str(uuid.uuid4())
         self._output_path = Path(output_path) if output_path else None
         self._entries: list[dict[str, Any]] = []
         self._current_phase: str = "init"
         self._current_iteration: int = 0
+        self._redactor = redactor
 
     def set_phase(self, phase: str) -> None:
         self._current_phase = phase
@@ -36,6 +41,9 @@ class StructuredLogger:
         message: str,
         **extra: Any,
     ) -> None:
+        if self._redactor:
+            message = self._redactor.redact(message)
+            extra = self._redactor.redact_dict(extra)
         entry = {
             "timestamp": datetime.now(UTC).isoformat(),
             "level": level,
