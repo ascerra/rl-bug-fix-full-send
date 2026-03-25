@@ -189,7 +189,10 @@ class TriagePhase(Phase):
                 success=False,
                 should_continue=False,
                 escalate=True,
-                escalation_reason="Issue classified as 'feature' — requires human review",
+                escalation_reason=(
+                    f"Issue classified as 'feature' — requires human review. "
+                    f"Reasoning: {triage.get('reasoning', 'none provided')}"
+                ),
                 findings=triage,
             )
 
@@ -216,7 +219,10 @@ class TriagePhase(Phase):
                 success=False,
                 should_continue=False,
                 escalate=True,
-                escalation_reason="Issue classified as 'ambiguous' with low confidence — requires human review",
+                escalation_reason=(
+                    f"Issue classified as 'ambiguous' with low confidence — requires human review. "
+                    f"Reasoning: {triage.get('reasoning', 'none provided')}"
+                ),
                 findings=triage,
             )
 

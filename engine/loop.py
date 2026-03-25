@@ -195,7 +195,10 @@ class RalphLoop:
                         "should_continue": result.should_continue,
                         "next_phase": result.next_phase,
                         "escalate": result.escalate,
+                        "escalation_reason": result.escalation_reason or "",
                     },
+                    "findings": _truncate_dict(result.findings, max_str_len=2000),
+                    "artifacts": _truncate_dict(result.artifacts, max_str_len=2000),
                 }
             )
             phase_results.append(result)
@@ -408,3 +411,28 @@ class RalphLoop:
             self.logger.debug("Visualization module not available — skipping reports")
         except Exception as exc:
             self.logger.warn(f"Report publishing failed (non-blocking): {exc}")
+
+
+def _truncate_dict(d: dict[str, Any], max_str_len: int = 2000) -> dict[str, Any]:
+    """Deep-copy a dict, truncating any string values beyond *max_str_len*.
+
+    Prevents execution.json from ballooning when a phase dumps large file
+    contents or LLM responses into findings/artifacts.
+    """
+    if not isinstance(d, dict):
+        return d
+    out: dict[str, Any] = {}
+    for k, v in d.items():
+        if isinstance(v, str) and len(v) > max_str_len:
+            out[k] = v[:max_str_len] + f"... [truncated, {len(v)} chars total]"
+        elif isinstance(v, dict):
+            out[k] = _truncate_dict(v, max_str_len)
+        elif isinstance(v, list):
+            out[k] = [
+                _truncate_dict(item, max_str_len) if isinstance(item, dict)
+                else (item[:max_str_len] + f"... [truncated]" if isinstance(item, str) and len(item) > max_str_len else item)
+                for item in v
+            ]
+        else:
+            out[k] = v
+    return out

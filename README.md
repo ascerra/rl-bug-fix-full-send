@@ -233,7 +233,20 @@ xdg-open progress/index.html  # Linux
 | Deterministic tool extraction | ✅ | `engine/tools/extraction.py` — `PatternDetector` + `ProposalGenerator`: scans execution records for repeated LLM patterns, proposes deterministic replacements (5 categories + caching fallback). CLI: `python -m engine.tools.extraction` |
 | Background quality scanner | ✅ | `engine/quality_scanner.py` — `BackgroundQualityScanner`: periodic scans combining golden principles, extraction proposals, code metrics. Auto-generates refactoring PR bodies. Weekly cron workflow. CLI: `python -m engine.quality_scanner` |
 
-**1533 tests passing**, lint clean, golden principles PASS.
+**1535 tests passing**, lint clean, golden principles PASS.
+
+### Cross-Fork PR Workflow
+
+The engine supports the standard open-source contribution model: fork the target repo, push a fix branch to your fork, then open a PR from `fork_owner:branch` into upstream `main`. Configure via the `fork_repo` workflow input.
+
+### Execution Traceability
+
+Every execution produces full traceability regardless of where the engine succeeds or fails:
+
+- **Iteration trace in summary.md** — each phase iteration is logged with duration, pass/fail status, escalation reasons (with LLM reasoning), and key findings
+- **Crash context capture** — if a phase crashes mid-cycle, the execution record includes which OODA step failed (observe/plan/act/validate/reflect), what partial context was gathered before the crash, and the traceback
+- **Findings and artifacts in execution.json** — each iteration now records the phase's `findings` and `artifacts` dicts (truncated to prevent bloat) so you can see what the LLM returned, what components were identified, what files were read
+- **GitHub Actions step summary** — `summary.md` is piped to `$GITHUB_STEP_SUMMARY` so traceability is visible directly in the workflow run without downloading artifacts
 
 ## Design Principles
 

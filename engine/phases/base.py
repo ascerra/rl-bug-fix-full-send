@@ -147,20 +147,42 @@ class Phase(ABC):
         self.tracer.set_phase(self.name)
         self.logger.info(f"Starting phase: {self.name}")
 
+        partial_context: dict[str, Any] = {}
+        step = "init"
         try:
+            step = "observe"
             observation = await self.observe()
+            partial_context["observation_keys"] = list(observation.keys()) if isinstance(observation, dict) else str(type(observation))
+
+            step = "plan"
             plan = await self.plan(observation)
+            partial_context["plan_keys"] = list(plan.keys()) if isinstance(plan, dict) else str(type(plan))
+
+            step = "act"
             result = await self.act(plan)
+            partial_context["act_keys"] = list(result.keys()) if isinstance(result, dict) else str(type(result))
+
+            step = "validate"
             validation = await self.validate(result)
+            partial_context["validate_keys"] = list(validation.keys()) if isinstance(validation, dict) else str(type(validation))
+
+            step = "reflect"
             phase_result = await self.reflect(validation)
         except Exception as e:
-            self.logger.error(f"Phase {self.name} failed with exception: {e}")
+            import traceback
+            tb_str = traceback.format_exc()
+            self.logger.error(f"Phase {self.name} failed at step '{step}': {e}")
             phase_result = PhaseResult(
                 phase=self.name,
                 success=False,
                 should_continue=False,
                 escalate=True,
-                escalation_reason=f"Unhandled exception in {self.name}: {e}",
+                escalation_reason=f"Unhandled exception in {self.name} at step '{step}': {e}",
+                findings={
+                    "failed_step": step,
+                    "partial_context": partial_context,
+                    "traceback": tb_str[-1500:],
+                },
             )
 
         self.logger.info(

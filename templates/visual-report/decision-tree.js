@@ -204,6 +204,10 @@ function renderDecisionTree(data, containerId, detailPanelId) {
       html += '<pre>' + escapeHtml(JSON.stringify(filtered, null, 2)) + '</pre>';
     }
 
+    if (!data.meta || Object.keys(data.meta).length === 0) {
+      html += '<p style="color:#8b949e;font-style:italic;">No additional metadata for this node.</p>';
+    }
+
     detailPanel.innerHTML = html;
     detailPanel.style.display = 'block';
   }

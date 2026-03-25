@@ -48,6 +48,9 @@ class ImplementPhase(Phase):
                 if result.get("success"):
                     file_contents[component] = result.get("content", "")
 
+        if not file_contents and self.tool_executor:
+            file_contents = await self._search_relevant_files()
+
         repo_structure = ""
         if self.tool_executor:
             tree = await self.tool_executor.execute(
@@ -280,6 +283,50 @@ class ImplementPhase(Phase):
                 if result.findings:
                     return result.findings
         return {}
+
+    async def _search_relevant_files(self) -> dict[str, str]:
+        """Fallback: grep the repo for keywords from the issue title/body."""
+        assert self.tool_executor is not None
+        title = self.issue_data.get("title", "")
+        body = self.issue_data.get("body", "")
+
+        keywords: list[str] = []
+        for word in title.split():
+            cleaned = word.strip(".,;:!?()[]{}\"'")
+            if len(cleaned) > 4 and cleaned.isalnum():
+                keywords.append(cleaned)
+
+        if not keywords:
+            for word in body.split()[:200]:
+                cleaned = word.strip(".,;:!?()[]{}\"'")
+                if len(cleaned) > 6 and cleaned.replace("-", "").replace("_", "").isalnum():
+                    keywords.append(cleaned)
+                    if len(keywords) >= 5:
+                        break
+
+        file_contents: dict[str, str] = {}
+        seen_files: set[str] = set()
+        for kw in keywords[:5]:
+            result = await self.tool_executor.execute(
+                "shell_run",
+                command=f"grep -rl '{kw}' --include='*.yaml' --include='*.yml' --include='*.py' --include='*.go' --include='*.ts' . 2>/dev/null | head -5",
+                timeout=15,
+            )
+            if result.get("success"):
+                for path in result.get("stdout", "").strip().splitlines():
+                    path = path.strip()
+                    if path and path not in seen_files and len(file_contents) < 5:
+                        seen_files.add(path)
+                        read_result = await self.tool_executor.execute("file_read", path=path)
+                        if read_result.get("success"):
+                            file_contents[path] = read_result.get("content", "")
+
+        if file_contents:
+            self.logger.info(
+                f"Fallback file search found {len(file_contents)} files: "
+                f"{list(file_contents.keys())}"
+            )
+        return file_contents
 
     async def _apply_fix(
         self,

@@ -192,6 +192,26 @@ def build_summary_markdown(
             duration = f"{ps['duration_s']}s" if ps.get("duration_s") else "---"
             lines.append(f"| {ps['phase']} | {ps['iterations']} | {status_mark} | {duration} |")
 
+    # Per-iteration trace
+    exec_data = execution.get("execution", execution)
+    iterations = exec_data.get("iterations", [])
+    if iterations:
+        lines.extend(["", "## Iteration Trace", ""])
+        for it in iterations:
+            res = it.get("result", {})
+            status_icon = "PASS" if res.get("success") else "FAIL"
+            esc_reason = res.get("escalation_reason", "")
+            line = f"- **#{it['number']} {it['phase']}** — {status_icon} ({it.get('duration_ms', 0):.0f}ms)"
+            if esc_reason:
+                line += f"  \n  > Escalation: {esc_reason}"
+            lines.append(line)
+
+            findings = it.get("findings", {})
+            if findings:
+                for fk, fv in findings.items():
+                    val = str(fv)[:200] + "..." if len(str(fv)) > 200 else str(fv)
+                    lines.append(f"  - `{fk}`: {val}")
+
     if report_data.errors:
         lines.extend(["", "## Errors", ""])
         for err in report_data.errors:

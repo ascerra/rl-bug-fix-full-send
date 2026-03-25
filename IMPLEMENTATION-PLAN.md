@@ -303,6 +303,35 @@ Phased build plan. Each phase produces usable, testable output. Phases are desig
 
 **Deliverable**: Self-improvement loop that watches the engine's own behavior and proposes improvements.
 
+## Production Hardening (post-build fixes from live runs)
+
+### Cross-Fork PR Workflow ✅
+- Added `fork_repo` workflow input to `ralph-loop.yml`
+- `git remote set-url --push origin` redirects pushes to the user's fork
+- `validate.py` creates `rl/fix` branch, pushes to fork, constructs `fork_owner:branch` head for cross-fork PR
+- Tests: bare-repo git helpers, cross-fork `head` assertion
+
+### LLM API Fix (Gemini usage_metadata) ✅
+- `engine/integrations/llm.py` — replaced `dict.get()` with `getattr()` for `GenerateContentResponse.usage_metadata` attribute access
+
+### Triage Sensitivity Tuning ✅
+- `templates/prompts/triage.md` — explicit bug indicators (error messages, actual/expected, stack traces) to reduce false "ambiguous" classifications
+- `engine/phases/triage.py` — ambiguous with confidence >= 0.4 now proceeds to implement instead of escalating
+
+### Implement Phase: file_changes + Keyword Fallback ✅
+- `templates/prompts/implement.md` — prompt now explicitly requests `file_changes` array with `path` + full `content`
+- `engine/phases/implement.py` — added `_search_relevant_files()` fallback: greps repo for issue keywords when triage provides no affected_components
+
+### Escalation Reason Transparency ✅
+- All escalation paths in `triage.py` now include the LLM's `reasoning` field in `escalation_reason`
+- Users see **why** the LLM classified something as feature/ambiguous, not just the classification
+
+### Execution Traceability ✅
+- `engine/loop.py` — iteration records now include `findings`, `artifacts`, and `escalation_reason` (truncated to prevent bloat via `_truncate_dict`)
+- `engine/phases/base.py` — crash handler captures which OODA step failed, partial context gathered before crash, and the Python traceback
+- `engine/visualization/publisher.py` — `summary.md` now includes an "Iteration Trace" section with per-phase pass/fail, duration, escalation reasons, and key findings
+- All of this surfaces in `$GITHUB_STEP_SUMMARY` so traceability is visible directly in the workflow run
+
 ## Build Order Dependency Graph
 
 ```

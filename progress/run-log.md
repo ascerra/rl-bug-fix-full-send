@@ -614,3 +614,40 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 - CLI returns exit code 1 only on critical violations — CI gates can decide whether warnings should block
 **Issues hit**: Two test failures on first run: (1) Jaccard similarity between "Check if file exists in repo path" and "Check if file exists in the repository" was 0.556 (below 0.6 threshold) — fixed by using more similar prompt summaries in test data, (2) `test_summary_no_extraction` expected "extraction" not in summary text but the summary line always includes "extraction proposal(s)" count — fixed by asserting against the detailed "Tool extraction:" section instead. Four lint errors (unused imports, line-too-long, import sorting) fixed with `make fmt`.
 **Next focus**: ALL items in IMPLEMENTATION-PLAN.md are now ✅ — the implementation is complete.
+
+## Run 29 — 2026-03-25
+
+**Phase**: Production Hardening — Traceability, Escalation Transparency, Cross-Fork PRs
+**What shipped**:
+- Cursor rule (`.cursor/rules/meta-loop-docs.mdc`) enforcing README/IMPLEMENTATION-PLAN/run-log updates on every change
+- All triage escalation paths now include LLM reasoning in `escalation_reason` (feature, ambiguous, and triage-recommends-escalation)
+- Iteration records in `execution.json` now include `findings`, `artifacts`, and `escalation_reason` per phase (truncated via `_truncate_dict` to prevent bloat)
+- Base phase crash handler captures failed OODA step, partial context, and Python traceback in findings
+- `summary.md` now includes an "Iteration Trace" section: per-phase pass/fail, duration, escalation reasons, key findings — all visible in `$GITHUB_STEP_SUMMARY`
+**Files changed**:
+- `engine/phases/triage.py` — escalation reasons now embed `triage.get('reasoning')`
+- `engine/loop.py` — iteration records include findings/artifacts/escalation_reason; added `_truncate_dict` helper
+- `engine/phases/base.py` — crash handler tracks OODA step, captures partial context and traceback
+- `engine/visualization/publisher.py` — iteration trace section in summary.md
+- `README.md` — added Cross-Fork PR Workflow and Execution Traceability sections, updated test count to 1535
+- `IMPLEMENTATION-PLAN.md` — added Production Hardening section documenting all post-build fixes
+- `engine/phases/implement.py` — keyword fallback for file discovery (from previous run, uncommitted)
+- `templates/prompts/implement.md` — explicit file_changes format (from previous run, uncommitted)
+**Test result**: 1535 passed, all green
+**Decisions made**:
+- Truncate findings/artifacts at 2000 chars per string value — prevents execution.json from growing unbounded when LLM dumps full file contents
+- Partial context on crash captures dict keys only (not values) — enough to diagnose what data was available without bloating the record
+**Issues hit**: Read tool caching stale file content — had to use shell python to read/modify files that had been updated on the remote
+**Next focus**: Push all pending changes and re-trigger workflow against KONFLUX-11443
+
+## Run 30 — 2026-03-25
+
+**Phase**: UX — Decision tree detail panel layout
+**What shipped**: Decision tree and action map detail panels now use a sticky side-panel layout instead of appearing below the visualization. Clicking a tree node shows details in a 380px panel on the right that sticks to the viewport as you scroll the tree. Includes responsive fallback to stacked layout on narrow screens (<900px). Detail panel starts visible with a hint message.
+**Files changed**:
+- `templates/visual-report/report.html` — added `.tree-split` grid layout, updated CSS for sticky side panel, wrapped tree+detail in split containers
+- `templates/visual-report/decision-tree.js` — added "no metadata" fallback message in `showDetail`
+**Test result**: 263 visualization tests pass, 1535 total pass
+**Decisions made**: Side-by-side sticky panel (not tooltip, not modal) — gives persistent context while navigating the tree
+**Issues hit**: None
+**Next focus**: Push all pending changes, re-trigger workflow
