@@ -130,16 +130,16 @@ class GeminiProvider:
         elapsed = (time.monotonic() - start) * 1000
         text = response.text or ""
 
+        usage = getattr(response, "usage_metadata", None)
+        tokens_in = getattr(usage, "prompt_token_count", 0) or 0 if usage else 0
+        tokens_out = getattr(usage, "candidates_token_count", 0) or 0 if usage else 0
+
         return LLMResponse(
             content=text,
             model=self.model,
             provider="gemini",
-            tokens_in=getattr(response, "usage_metadata", {}).get("prompt_token_count", 0)
-            if hasattr(response, "usage_metadata")
-            else 0,
-            tokens_out=getattr(response, "usage_metadata", {}).get("candidates_token_count", 0)
-            if hasattr(response, "usage_metadata")
-            else 0,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
             latency_ms=elapsed,
         )
 
