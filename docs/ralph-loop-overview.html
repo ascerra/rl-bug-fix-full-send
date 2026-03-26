@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Ralph Loop — Autonomous Bug Fix Engine</title>
+<style>
+  :root {
+    --bg: #0f172a;
+    --surface: #1e293b;
+    --card: #334155;
+    --accent: #3b82f6;
+    --accent2: #8b5cf6;
+    --green: #10b981;
+    --amber: #f59e0b;
+    --red: #ef4444;
+    --cyan: #06b6d4;
+    --text: #f1f5f9;
+    --muted: #94a3b8;
+    --dim: #64748b;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    height: 100vh;
+  }
+
+  .deck { position: relative; width: 100vw; height: 100vh; }
+
+  .slide {
+    position: absolute; inset: 0;
+    display: flex; flex-direction: column;
+    justify-content: center; align-items: center;
+    padding: 60px 80px;
+    opacity: 0; pointer-events: none;
+    transition: opacity 0.5s ease;
+  }
+  .slide.active { opacity: 1; pointer-events: auto; }
+
+  .slide-num {
+    position: fixed; bottom: 24px; right: 36px;
+    font-size: 14px; color: var(--dim);
+    font-variant-numeric: tabular-nums;
+    z-index: 100;
+  }
+
+  h1 { font-size: 52px; font-weight: 800; line-height: 1.15; margin-bottom: 16px; }
+  h2 { font-size: 38px; font-weight: 700; line-height: 1.2; margin-bottom: 20px; }
+  h3 { font-size: 24px; font-weight: 600; color: var(--muted); margin-bottom: 12px; }
+
+  .subtitle { font-size: 22px; color: var(--muted); max-width: 700px; text-align: center; line-height: 1.5; }
+  .tag { display: inline-block; padding: 4px 14px; border-radius: 20px; font-size: 13px; font-weight: 600; margin: 4px; }
+
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 36px; width: 100%; max-width: 1100px; }
+  .grid-3 { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 24px; width: 100%; max-width: 1100px; }
+  .grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 16px; width: 100%; max-width: 1100px; }
+
+  .card {
+    background: var(--surface);
+    border-radius: 16px; padding: 28px;
+    border: 1px solid rgba(255,255,255,0.06);
+  }
+  .card h4 { font-size: 18px; font-weight: 700; margin-bottom: 10px; }
+  .card p, .card li { font-size: 15px; color: var(--muted); line-height: 1.6; }
+  .card ul { list-style: none; padding: 0; }
+  .card li::before { content: "→ "; color: var(--accent); font-weight: 700; }
+
+  .phase-card {
+    background: var(--surface); border-radius: 14px;
+    padding: 20px 16px; text-align: center;
+    border-top: 4px solid var(--accent);
+  }
+  .phase-card h4 { font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+  .phase-card p { font-size: 12px; color: var(--muted); line-height: 1.5; }
+
+  .comparison-row {
+    display: grid; grid-template-columns: 180px 1fr 1fr; gap: 0;
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+  }
+  .comparison-row > div { padding: 14px 18px; font-size: 15px; }
+  .comparison-row .metric { font-weight: 600; color: var(--text); background: var(--surface); }
+  .comparison-row .human { color: var(--muted); }
+  .comparison-row .ralph { color: var(--muted); }
+  .comparison-header { background: var(--card); border-radius: 12px 12px 0 0; }
+  .comparison-header > div { font-weight: 700; color: var(--text); font-size: 14px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .win { background: rgba(16, 185, 129, 0.08); color: var(--green) !important; font-weight: 600; }
+
+  .stat-box { text-align: center; }
+  .stat-box .num { font-size: 48px; font-weight: 800; line-height: 1; }
+  .stat-box .label { font-size: 14px; color: var(--muted); margin-top: 8px; }
+
+  .ooda-ring {
+    display: flex; gap: 0; align-items: center; justify-content: center;
+    flex-wrap: wrap; max-width: 800px;
+  }
+  .ooda-step {
+    padding: 16px 28px; border-radius: 12px; text-align: center;
+    min-width: 130px;
+  }
+  .ooda-step h4 { font-size: 16px; font-weight: 700; color: #fff; }
+  .ooda-step p { font-size: 12px; color: rgba(255,255,255,0.8); margin-top: 4px; }
+  .ooda-arrow { font-size: 28px; color: var(--dim); margin: 0 6px; }
+
+  .callout {
+    background: rgba(245, 158, 11, 0.1);
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    border-radius: 12px; padding: 24px 32px;
+    max-width: 900px; margin-top: 24px;
+  }
+  .callout h4 { color: var(--amber); font-size: 16px; margin-bottom: 8px; }
+  .callout p { color: var(--muted); font-size: 15px; line-height: 1.6; }
+
+  .progress-bar {
+    height: 3px; background: var(--surface);
+    position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  }
+  .progress-bar .fill {
+    height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2));
+    transition: width 0.4s ease;
+  }
+
+  .nav-hint {
+    position: fixed; bottom: 24px; left: 36px;
+    font-size: 13px; color: var(--dim); z-index: 100;
+  }
+
+  .accent-text { color: var(--accent); }
+  .green-text { color: var(--green); }
+  .purple-text { color: var(--accent2); }
+  .amber-text { color: var(--amber); }
+  .red-text { color: var(--red); }
+  .cyan-text { color: var(--cyan); }
+
+  .left-align { text-align: left; align-items: flex-start; }
+  .full-width { width: 100%; max-width: 1100px; }
+  .mt-12 { margin-top: 12px; }
+  .mt-24 { margin-top: 24px; }
+  .mt-32 { margin-top: 32px; }
+  .mb-8 { margin-bottom: 8px; }
+  .gap-12 { gap: 12px; }
+</style>
+</head>
+<body>
+
+<div class="progress-bar"><div class="fill" id="progress"></div></div>
+<div class="slide-num" id="slideNum"></div>
+<div class="nav-hint">← → or click to navigate</div>
+
+<div class="deck" id="deck">
+
+<!-- ==================== SLIDE 1: Title ==================== -->
+<div class="slide active" data-slide="0">
+  <h3>Introducing</h3>
+  <h1 style="text-align:center">
+    <span class="accent-text">Ralph Loop</span><br/>Bug Fix Engine
+  </h1>
+  <p class="subtitle mt-12">
+    An autonomous AI agent that triages, fixes, reviews, and opens PRs for real-world bugs — in under 3 minutes.
+  </p>
+  <div style="display:flex; gap:12px; margin-top:32px;">
+    <span class="tag" style="background:var(--accent); color:#fff;">Autonomous</span>
+    <span class="tag" style="background:var(--accent2); color:#fff;">Self-Reviewing</span>
+    <span class="tag" style="background:var(--green); color:#fff;">Production-Proven</span>
+    <span class="tag" style="background:var(--amber); color:#000;">Self-Improving</span>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 2: The Problem ==================== -->
+<div class="slide" data-slide="1">
+  <h2>The Problem</h2>
+  <div class="grid-3 mt-32">
+    <div class="card">
+      <h4 class="red-text">Slow Turnaround</h4>
+      <p>Bug reports sit in backlogs for days. By the time a fix ships, the reporter has moved on or worked around it.</p>
+    </div>
+    <div class="card">
+      <h4 class="red-text">Context Switching</h4>
+      <p>Engineers interrupt deep work to triage. They read the issue, clone the repo, reproduce the bug, context-switch into the codebase — all before writing a single line of fix.</p>
+    </div>
+    <div class="card">
+      <h4 class="red-text">Review Bottleneck</h4>
+      <p>Fixes wait hours or days for code review. Reviewers lack context on the bug, leading to shallow reviews that miss subtle issues.</p>
+    </div>
+  </div>
+  <p class="subtitle mt-32" style="font-size:18px;">
+    What if we could go from bug report to reviewed PR in <strong class="accent-text">minutes, not days</strong>?
+  </p>
+</div>
+
+<!-- ==================== SLIDE 3: Core Concept ==================== -->
+<div class="slide" data-slide="2">
+  <h2>The <span class="accent-text">Ralph Loop</span> Concept</h2>
+  <p class="subtitle mb-8">An agentic iteration pattern applied at two levels</p>
+  <div class="grid-2 mt-24">
+    <div class="card" style="border-top: 3px solid var(--accent2);">
+      <h4 class="purple-text">Meta Loop</h4>
+      <p style="font-size:16px; margin-bottom:12px;">Builds and improves the engine itself.</p>
+      <ul>
+        <li>51 completed iterations</li>
+        <li>Each run adds capability or fixes a deficiency</li>
+        <li>Principles extracted automatically from patterns</li>
+        <li>Compound improvement over time</li>
+      </ul>
+    </div>
+    <div class="card" style="border-top: 3px solid var(--green);">
+      <h4 class="green-text">Production Loop</h4>
+      <p style="font-size:16px; margin-bottom:12px;">Fixes bugs in real GitHub repositories.</p>
+      <ul>
+        <li>Runs in GitHub Actions — no local setup</li>
+        <li>Targets any repo with any language stack</li>
+        <li>Full triage → fix → review → PR pipeline</li>
+        <li>Escalates to humans when stuck</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 4: Pipeline ==================== -->
+<div class="slide" data-slide="3">
+  <h2>Phase Pipeline</h2>
+  <p class="subtitle mb-8">5 phases, each running a full OODA cycle independently</p>
+  <div class="grid-5 mt-24">
+    <div class="phase-card" style="border-color: var(--accent);">
+      <h4 class="accent-text">Triage</h4>
+      <p>Classify severity, find affected files, attempt reproduction, detect repo stack</p>
+    </div>
+    <div class="phase-card" style="border-color: var(--accent2);">
+      <h4 class="purple-text">Implement</h4>
+      <p>Root cause analysis, minimal fix, run linters, inner iteration loop</p>
+    </div>
+    <div class="phase-card" style="border-color: var(--cyan);">
+      <h4 class="cyan-text">Review</h4>
+      <p>Zero-trust independent review, correctness + security + path consistency</p>
+    </div>
+    <div class="phase-card" style="border-color: var(--green);">
+      <h4 class="green-text">Validate</h4>
+      <p>Verify minimal diff, generate PR description, create PR, monitor CI</p>
+    </div>
+    <div class="phase-card" style="border-color: var(--amber);">
+      <h4 class="amber-text">Report</h4>
+      <p>Decision tree, action map, interactive HTML evidence package</p>
+    </div>
+  </div>
+  <div style="display:flex; align-items:center; gap:12px; margin-top:28px;">
+    <span style="font-size:14px; color:var(--dim);">Review rejects?</span>
+    <span style="font-size:22px; color:var(--red);">↩</span>
+    <span style="font-size:14px; color:var(--red); font-weight:600;">Feeds specific suggestions back to Implement for retry</span>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 5: OODA ==================== -->
+<div class="slide" data-slide="4">
+  <h2>OODA Cycle <span style="font-size:22px; color:var(--muted);">(per phase)</span></h2>
+  <div class="ooda-ring mt-32">
+    <div class="ooda-step" style="background:var(--accent);">
+      <h4>Observe</h4>
+      <p>Gather context</p>
+    </div>
+    <span class="ooda-arrow">→</span>
+    <div class="ooda-step" style="background:var(--accent2);">
+      <h4>Plan</h4>
+      <p>LLM analysis</p>
+    </div>
+    <span class="ooda-arrow">→</span>
+    <div class="ooda-step" style="background:var(--green);">
+      <h4>Act</h4>
+      <p>Execute tools</p>
+    </div>
+    <span class="ooda-arrow">→</span>
+    <div class="ooda-step" style="background:var(--cyan);">
+      <h4>Validate</h4>
+      <p>Check results</p>
+    </div>
+    <span class="ooda-arrow">→</span>
+    <div class="ooda-step" style="background:var(--amber);">
+      <h4>Reflect</h4>
+      <p>Iterate / advance</p>
+    </div>
+  </div>
+  <div class="grid-2 mt-32" style="max-width:900px;">
+    <div class="card">
+      <h4>Zero Trust Between Phases</h4>
+      <p>The review phase re-reads the issue and diff from scratch. It does not trust the implementation phase's summary.</p>
+    </div>
+    <div class="card">
+      <h4>Escalation, Not Hallucination</h4>
+      <p>When stuck after max retries, the engine escalates to a human with full context — never guesses or ships a bad fix.</p>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 6: Testing Strategy ==================== -->
+<div class="slide" data-slide="5">
+  <h2>Testing Strategy: <span class="amber-text">CI-First</span></h2>
+  <p class="subtitle">Test execution is <strong>disabled by default</strong> — this is deliberate</p>
+  <div class="grid-2 mt-32" style="max-width:1000px;">
+    <div class="card">
+      <h4 class="red-text">Why Not Run Tests?</h4>
+      <ul>
+        <li>Target repos need runtimes we don't control</li>
+        <li>Deps may require Docker, databases, kind clusters</li>
+        <li>Test suites can run 20+ minutes</li>
+        <li>Flaky tests waste the iteration budget</li>
+        <li>Running arbitrary shell = security surface</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h4 class="green-text">What We Do Instead</h4>
+      <ul>
+        <li>Linting is always on (fast, safe, universal)</li>
+        <li>The PR triggers the repo's own CI pipeline</li>
+        <li>Repo CI has the correct matrix, services, secrets</li>
+        <li>Repos can opt in via <code>.rl-config.yaml</code></li>
+        <li>Three modes: disabled → opportunistic → required</li>
+      </ul>
+    </div>
+  </div>
+  <div class="callout">
+    <h4>Why this matters</h4>
+    <p>The target repo's CI is the authoritative test environment — it has the build matrix, service containers, and secrets the engine never will. Delegating validation to CI is more reliable than attempting to replicate it.</p>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 7: Production Results ==================== -->
+<div class="slide" data-slide="6">
+  <h2>Production Results: <span class="accent-text">KONFLUX-11443</span></h2>
+  <p class="subtitle mb-8">Race condition in parallel image processing — real Kubernetes CI bug</p>
+  <div class="full-width mt-24" style="max-width:860px; border-radius:12px; overflow:hidden; border:1px solid rgba(255,255,255,0.06);">
+    <div class="comparison-row comparison-header">
+      <div>Metric</div>
+      <div style="color:var(--accent);">Human Fix (PR #3057)</div>
+      <div style="color:var(--accent2);">Ralph Loop</div>
+    </div>
+    <div class="comparison-row">
+      <div class="metric">Root Cause</div>
+      <div class="human">Correct — race condition</div>
+      <div class="ralph win">Detailed + precise explanation</div>
+    </div>
+    <div class="comparison-row">
+      <div class="metric">Fix Strategy</div>
+      <div class="human">image_num prefix ($1)</div>
+      <div class="ralph">image_num suffix ($4)</div>
+    </div>
+    <div class="comparison-row">
+      <div class="metric">Path Consistency</div>
+      <div class="human win">Perfect — all paths aligned</div>
+      <div class="ralph">99% — :latest dropped in cleanup</div>
+    </div>
+    <div class="comparison-row">
+      <div class="metric">PR Documentation</div>
+      <div class="human">Short commit message</div>
+      <div class="ralph win">Full root cause + test plan</div>
+    </div>
+    <div class="comparison-row">
+      <div class="metric">Time to Fix</div>
+      <div class="human">~3 hours</div>
+      <div class="ralph win">2.8 minutes</div>
+    </div>
+    <div class="comparison-row" style="border:none;">
+      <div class="metric" style="font-size:18px; font-weight:800;">Grade</div>
+      <div class="human" style="font-size:28px; font-weight:800; color:var(--accent);">A</div>
+      <div class="ralph" style="font-size:28px; font-weight:800; color:var(--accent2);">A−</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 8: Self-Improvement ==================== -->
+<div class="slide" data-slide="7">
+  <h2>Self-Improvement Loop</h2>
+  <p class="subtitle">Every production run feeds back into the engine</p>
+  <div class="grid-3 mt-32">
+    <div class="card">
+      <h4 class="accent-text">Prompt Refinement</h4>
+      <p>Post-mortem analysis of production diffs leads to targeted prompt updates. The KONFLUX-11443 comparison added path-consistency guidance to review + implement prompts.</p>
+    </div>
+    <div class="card">
+      <h4 class="green-text">Deterministic Safety Nets</h4>
+      <p>When an LLM repeatedly misses a class of error, we add a programmatic checker. The path-consistency checker now catches tag mismatches the LLM missed.</p>
+    </div>
+    <div class="card">
+      <h4 class="amber-text">Golden Principles</h4>
+      <p>7 structural properties enforced by AST analysis. The quality scanner runs weekly and auto-generates refactoring PRs when violations are detected.</p>
+    </div>
+  </div>
+  <div style="display:flex; gap:40px; margin-top:36px; align-items:center; justify-content:center;">
+    <div class="stat-box">
+      <div class="num accent-text">51</div>
+      <div class="label">Meta Loop Runs</div>
+    </div>
+    <div class="stat-box">
+      <div class="num green-text">253</div>
+      <div class="label">Unit Tests</div>
+    </div>
+    <div class="stat-box">
+      <div class="num purple-text">127</div>
+      <div class="label">Injection Tests</div>
+    </div>
+    <div class="stat-box">
+      <div class="num amber-text">7</div>
+      <div class="label">Golden Principles</div>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 9: Architecture ==================== -->
+<div class="slide" data-slide="8">
+  <h2>Architecture</h2>
+  <p class="subtitle mb-8">Layered design with phase isolation and zero-trust boundaries</p>
+  <div class="grid-3 mt-24" style="max-width:1000px;">
+    <div class="card" style="border-left: 3px solid var(--accent);">
+      <h4>Orchestration</h4>
+      <ul>
+        <li><code>loop.py</code> — phase dispatch</li>
+        <li><code>config.py</code> — YAML config</li>
+        <li><code>secrets.py</code> — redaction</li>
+      </ul>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--accent2);">
+      <h4>Phases</h4>
+      <ul>
+        <li>5 isolated phase classes</li>
+        <li>Phase-specific prompts</li>
+        <li>Phase-specific tool permissions</li>
+      </ul>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--green);">
+      <h4>Tools</h4>
+      <ul>
+        <li>7 sandboxed tools</li>
+        <li>Stack-aware test runner</li>
+        <li>File I/O with safety checks</li>
+      </ul>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--cyan);">
+      <h4>Integrations</h4>
+      <ul>
+        <li>LLM (Gemini, Anthropic)</li>
+        <li>GitHub API</li>
+        <li>Slack + Jira</li>
+      </ul>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--red);">
+      <h4>Observability</h4>
+      <ul>
+        <li>Structured logger + narration</li>
+        <li>Tracer for action tracking</li>
+        <li>Metrics collection</li>
+      </ul>
+    </div>
+    <div class="card" style="border-left: 3px solid var(--amber);">
+      <h4>Visualization</h4>
+      <ul>
+        <li>Jinja2 + D3.js reports</li>
+        <li>Decision tree + action map</li>
+        <li>Comparison views</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ==================== SLIDE 10: Takeaways ==================== -->
+<div class="slide" data-slide="9">
+  <h2>Key Takeaways</h2>
+  <div class="grid-2 mt-32" style="max-width:900px;">
+    <div class="card">
+      <h4 style="font-size:36px; margin-bottom:16px;">🔄</h4>
+      <h4>Agentic Iteration Works</h4>
+      <p>Feed failures back as context. The engine improves on each pass, converging on correct fixes without human intervention.</p>
+    </div>
+    <div class="card">
+      <h4 style="font-size:36px; margin-bottom:16px;">🛡️</h4>
+      <h4>Trust Nothing</h4>
+      <p>Zero trust between phases. Each phase re-reads source material. Deterministic checks backstop LLM judgment.</p>
+    </div>
+    <div class="card">
+      <h4 style="font-size:36px; margin-bottom:16px;">⚡</h4>
+      <h4>60x Faster</h4>
+      <p>2.8 minutes vs 3 hours. Near-human quality. The gap closes with every production run and post-mortem.</p>
+    </div>
+    <div class="card">
+      <h4 style="font-size:36px; margin-bottom:16px;">📈</h4>
+      <h4>Compound Improvement</h4>
+      <p>51 meta-loop runs. Each one adds capability, fixes a deficiency, or hardens the system. The engine gets better by using it.</p>
+    </div>
+  </div>
+  <p class="subtitle mt-32" style="font-size:20px;">
+    <strong class="accent-text">github.com/ascerra/rl-bug-fix-full-send</strong>
+  </p>
+</div>
+
+</div><!-- /deck -->
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const total = slides.length;
+  let current = 0;
+
+  function show(n) {
+    current = Math.max(0, Math.min(n, total - 1));
+    slides.forEach((s, i) => s.classList.toggle('active', i === current));
+    document.getElementById('slideNum').textContent = `${current + 1} / ${total}`;
+    document.getElementById('progress').style.width = `${((current + 1) / total) * 100}%`;
+  }
+
+  document.addEventListener('keydown', e => {
+    if (e.key === 'ArrowRight' || e.key === ' ') { e.preventDefault(); show(current + 1); }
+    if (e.key === 'ArrowLeft') { e.preventDefault(); show(current - 1); }
+    if (e.key === 'Home') { e.preventDefault(); show(0); }
+    if (e.key === 'End') { e.preventDefault(); show(total - 1); }
+  });
+
+  document.addEventListener('click', e => {
+    if (e.clientX > window.innerWidth / 2) show(current + 1);
+    else show(current - 1);
+  });
+
+  let touchStartX = 0;
+  document.addEventListener('touchstart', e => { touchStartX = e.touches[0].clientX; });
+  document.addEventListener('touchend', e => {
+    const diff = e.changedTouches[0].clientX - touchStartX;
+    if (Math.abs(diff) > 50) show(current + (diff < 0 ? 1 : -1));
+  });
+
+  show(0);
+</script>
+</body>
+</html>
