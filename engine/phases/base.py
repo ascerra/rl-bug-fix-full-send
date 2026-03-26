@@ -12,6 +12,7 @@ from engine.integrations.llm import LLMProvider
 from engine.observability.logger import StructuredLogger
 from engine.observability.metrics import LoopMetrics
 from engine.observability.tracer import ActionRecord, Tracer
+from engine.observability.transcript import TranscriptWriter
 from engine.phases.prompt_loader import load_prompt
 
 if TYPE_CHECKING:
@@ -85,6 +86,7 @@ class Phase(ABC):
         tool_executor: ToolExecutor | None = None,
         config: EngineConfig | None = None,
         metrics: LoopMetrics | None = None,
+        transcript: TranscriptWriter | None = None,
     ):
         self.llm = llm
         self.logger = logger
@@ -95,6 +97,7 @@ class Phase(ABC):
         self.tool_executor = tool_executor
         self.config = config or EngineConfig()
         self.metrics = metrics
+        self.transcript = transcript
 
     @classmethod
     def get_allowed_tools(cls) -> list[str]:
@@ -129,15 +132,34 @@ class Phase(ABC):
         latency_ms: float,
         prompt_summary: str = "",
         response_summary: str = "",
+        system_prompt: str = "",
+        user_message: str = "",
+        response: str = "",
     ) -> ActionRecord:
-        """Record an LLM call in both the tracer (action log) and metrics (counters).
+        """Record an LLM call in the tracer, metrics, and live HTML transcript.
 
         All phases should call this instead of ``self.tracer.record_llm_call()``
         directly so that ``LoopMetrics`` token/call counters stay in sync with
-        the action trace.
+        the action trace and the transcript captures full inference context.
         """
         if self.metrics is not None:
             self.metrics.record_llm_call(tokens_in=tokens_in, tokens_out=tokens_out)
+
+        if self.transcript is not None:
+            self.transcript.record(
+                phase=self.name,
+                iteration=self.tracer._current_iteration,
+                description=description,
+                system_prompt=system_prompt,
+                user_message=user_message,
+                response=response,
+                model=model,
+                provider=provider,
+                tokens_in=tokens_in,
+                tokens_out=tokens_out,
+                latency_ms=latency_ms,
+            )
+
         return self.tracer.record_llm_call(
             description=description,
             model=model,

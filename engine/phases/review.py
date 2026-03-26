@@ -119,6 +119,9 @@ class ReviewPhase(Phase):
             latency_ms=llm_response.latency_ms,
             prompt_summary="Review system prompt + issue + diff + file contents",
             response_summary=llm_response.content[:500],
+            system_prompt=system_prompt,
+            user_message=user_message,
+            response=llm_response.content,
         )
 
         review_result = parse_review_response(llm_response.content)

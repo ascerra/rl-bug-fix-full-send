@@ -184,6 +184,9 @@ class ImplementPhase(Phase):
             latency_ms=llm_response.latency_ms,
             prompt_summary="Implement system prompt + triage context + code + issue",
             response_summary=llm_response.content[:500],
+            system_prompt=system_prompt,
+            user_message=user_message,
+            response=llm_response.content,
         )
 
         impl_plan = parse_implement_response(llm_response.content)
@@ -435,6 +438,9 @@ class ImplementPhase(Phase):
                 latency_ms=llm_response.latency_ms,
                 prompt_summary="JSON-only retry prompt",
                 response_summary=llm_response.content[:500],
+                system_prompt=system_prompt,
+                user_message=retry_message,
+                response=llm_response.content,
             )
 
             retry_plan = parse_implement_response(llm_response.content)
@@ -748,6 +754,9 @@ class ImplementPhase(Phase):
             latency_ms=llm_response.latency_ms,
             prompt_summary=f"Refinement prompt with test/lint failures (iter {iteration})",
             response_summary=llm_response.content[:500],
+            system_prompt=system_prompt,
+            user_message=user_message,
+            response=llm_response.content,
         )
 
         impl_plan = parse_implement_response(llm_response.content)

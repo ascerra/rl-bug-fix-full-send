@@ -20,6 +20,7 @@ from engine.integrations.llm import LLMProvider
 from engine.observability.logger import StructuredLogger
 from engine.observability.metrics import LoopMetrics
 from engine.observability.tracer import Tracer
+from engine.observability.transcript import TranscriptWriter
 from engine.phases.base import Phase, PhaseResult
 from engine.secrets import SecretRedactor
 from engine.tools.executor import ToolExecutor
@@ -100,6 +101,10 @@ class RalphLoop:
         )
         self.tracer = Tracer(redactor=redactor)
         self.metrics = LoopMetrics()
+        self.transcript = TranscriptWriter(
+            output_path=self.output_dir / "transcripts" / "transcript.html",
+            redactor=redactor,
+        )
         self.execution = ExecutionRecord(
             trigger={"type": "github_issue", "source_url": issue_url},
             target={"repo_path": repo_path, "comparison_ref": comparison_ref},
@@ -311,6 +316,7 @@ class RalphLoop:
         self.execution.actions = self.tracer.get_actions_as_dicts()
 
         self._write_outputs(status)
+        self.transcript.finalize()
 
         total_min = (time.monotonic() - self._start_time) / 60
         self.logger.narrate(
@@ -371,6 +377,7 @@ class RalphLoop:
                 tool_executor=tool_executor,
                 config=self.config,
                 metrics=self.metrics,
+                transcript=self.transcript,
             )
 
             self.logger.info(f"Executing phase: {phase_name}")

@@ -1015,3 +1015,20 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 - Post-PR CI monitoring is informational only — captures CI status in the execution record for future iteration but doesn't block the loop
 **Issues hit**: Three pre-existing test failures in `test_publisher.py` — the narrative section was in `ReportData` and `summary.md` but never injected into the `report.html` template. Fixed by adding a Jinja2 block (same issue noted in Run 47 but the template fix wasn't in the working tree).
 **Next focus**: All items in IMPLEMENTATION-PLAN.md are now complete (Phases 0–7, all sub-items ✅). The engine is feature-complete for MVP. Next steps would be running production validation against real Konflux bugs.
+
+## Run 49 — Wire TranscriptWriter for Full LLM Observability
+
+**Date**: 2026-03-26
+**Phase**: Post-MVP — observability gap fix
+**What shipped**: Wired the existing `TranscriptWriter` into the engine so every LLM call records full system prompt, user message, and response in a live HTML transcript. Previously, the `TranscriptWriter` class existed but was never instantiated or connected — phases only logged truncated 500-char summaries via the `Tracer`. Now: (1) `RalphLoop` creates a `TranscriptWriter` at `output/transcripts/transcript.html`, (2) `Phase.record_llm_call()` accepts full `system_prompt`, `user_message`, `response` kwargs and forwards to the transcript, (3) all 6 LLM call sites across triage/implement/review/validate pass full texts, (4) CI inline logs now print full system prompt (1000 chars), user message (2000 chars), and response (3000 chars) per call, (5) `finalize()` injects an aggregate summary section into the HTML.
+**Files changed**:
+- `engine/phases/base.py` — import `TranscriptWriter`, add `transcript` param to `Phase.__init__()`, expand `record_llm_call()` to forward full texts
+- `engine/loop.py` — import and create `TranscriptWriter`, pass to phases, call `finalize()` at end
+- `engine/phases/triage.py` — pass full system_prompt/user_message/response to `record_llm_call()`
+- `engine/phases/implement.py` — same for 3 call sites (plan, parse_retry, refinement)
+- `engine/phases/review.py` — same for review assessment call
+- `engine/phases/validate.py` — same for validation assessment call
+- `engine/observability/transcript.py` — enhanced `_print_inline()` for richer CI logs, implemented `finalize()` with summary stats
+**Test result**: 624 phase/transcript tests pass; 2 pre-existing config default failures unrelated
+**Decisions made**: Chose to wire transcript into `Phase.record_llm_call()` rather than wrapping the LLM provider, because each call site has unique description/context that only the phase knows
+**Next focus**: Verify transcript HTML artifact appears in next CI run
