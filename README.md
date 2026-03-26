@@ -1,6 +1,6 @@
 # RL Bug Fix Full Send
 
-An agentic SDLC engine that uses iterative **Ralph Loops** to autonomously triage, implement, review, test, and report on bug fixes in GitHub-hosted repositories.
+An agentic SDLC engine that uses iterative **Ralph Loops** to autonomously triage, implement, review, and report on bug fixes in GitHub-hosted repositories.
 
 <!-- Overview diagram rendered inline as SVG below -->
 
@@ -73,7 +73,7 @@ The meta loop built the production system over 51 iterations (see [progress/run-
 | **Phases** | `engine/phases/` | Triage, implement, review, validate, report — each with OODA cycle |
 | **Tools** | `engine/tools/executor.py` | Sandboxed file ops, shell commands, git operations (7 tools) |
 | **LLM** | `engine/integrations/llm.py` | Gemini (primary) + Anthropic (fallback), provider-agnostic interface |
-| **Integrations** | `engine/integrations/` | GitHub, Slack, Jira adapters with injection guards |
+| **Integrations** | `engine/integrations/` | GitHub (core), Slack and Jira (optional, off by default) — all with injection guards |
 | **Observability** | `engine/observability/` | Structured JSON logging, action tracing, metrics, live narration |
 | **Visualization** | `engine/visualization/` | HTML reports, D3.js decision trees and action maps, comparison views |
 | **Security** | `engine/secrets.py` | Secret loading, validation, redaction across all outputs |
@@ -161,7 +161,7 @@ The engine improves itself through multiple feedback mechanisms:
 | `execution.json` from production runs | Deterministic checks (path consistency, paired operations) | Prompt updates (`review.md`, `implement.md`) + code safety nets (`review.py`) |
 | Repeated LLM call patterns | Pattern detection (`extraction.py`) | Deterministic tool proposals replacing expensive LLM calls |
 | Engine source code | Golden principles (7 structural properties) | AST-based enforcement via `golden_principles.py` |
-| Code metrics + scan results | Background quality scanner | Weekly cron scan + auto-generated refactoring PRs |
+| Code metrics + scan results | Background quality scanner | Weekly cron scan + auto-created GitHub issues on critical findings |
 
 **Recent improvement (Run 51)**: After comparing the engine's fix for KONFLUX-11443 against the human fix, we identified that the self-review phase missed a subtle OCI tag mismatch (`:latest` dropped from a cleanup path). Three changes were made:
 

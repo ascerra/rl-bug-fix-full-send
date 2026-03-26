@@ -97,10 +97,12 @@
   <text x="545" y="335" text-anchor="middle" class="module-label" fill="#fff">LLM</text>
   <rect x="580" y="305" width="50" height="50" class="module-box" fill="#fb923c"/>
   <text x="605" y="335" text-anchor="middle" class="module-label" fill="#fff">GH</text>
-  <rect x="640" y="305" width="50" height="50" class="module-box" fill="#fdba74"/>
-  <text x="665" y="335" text-anchor="middle" class="module-label" fill="#1e293b">Slack</text>
-  <rect x="700" y="305" width="50" height="50" class="module-box" fill="#fed7aa"/>
-  <text x="725" y="335" text-anchor="middle" class="module-label" fill="#1e293b">Jira</text>
+  <rect x="640" y="305" width="50" height="50" class="module-box" fill="#fdba74" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="665" y="331" text-anchor="middle" class="module-label" fill="#1e293b">Slack</text>
+  <text x="665" y="345" text-anchor="middle" font-size="7" fill="#78716c">optional</text>
+  <rect x="700" y="305" width="50" height="50" class="module-box" fill="#fed7aa" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4,2"/>
+  <text x="725" y="331" text-anchor="middle" class="module-label" fill="#1e293b">Jira</text>
+  <text x="725" y="345" text-anchor="middle" font-size="7" fill="#78716c">optional</text>
 
   <!-- Observability layer -->
   <rect x="20" y="380" width="470" height="70" rx="8" fill="#fef2f2" stroke="#fecaca" stroke-width="1" class="layer-bg"/>
