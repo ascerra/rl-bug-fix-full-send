@@ -32,7 +32,7 @@ class LoopConfig:
 
 @dataclass
 class SecurityConfig:
-    commit_signing: bool = True
+    commit_signing: bool = False
     signing_method: str = "gitsign"
     provenance_recording: bool = True
     untrusted_content_delimiter: str = "--- UNTRUSTED CONTENT BELOW ---"
@@ -60,7 +60,7 @@ class ImplementPhaseConfig:
     enabled: bool = True
     max_inner_iterations: int = 5
     run_tests_after_each_edit: bool = False
-    run_linters: bool = True
+    run_linters: bool = False
     max_parse_retries: int = 3
     test_command: str = ""
     lint_command: str = ""
@@ -81,7 +81,7 @@ class ReviewPhaseConfig:
 class ValidatePhaseConfig:
     enabled: bool = True
     full_test_suite: bool = False
-    ci_equivalent: bool = True
+    ci_equivalent: bool = False
     minimal_diff_check: bool = True
     test_command: str = ""
     lint_command: str = ""
