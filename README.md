@@ -1,289 +1,477 @@
 # RL Bug Fix Full Send
 
-Ralph Loop Bug Fix Engine — an agentic SDLC system that uses iterative Ralph Loops to autonomously triage, implement, review, test, and report on bug fixes in GitHub-hosted repositories.
+An agentic SDLC engine that uses iterative **Ralph Loops** to autonomously triage, implement, review, test, and report on bug fixes in GitHub-hosted repositories.
 
-## What is this?
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     RALPH LOOP BUG FIX ENGINE                       │
+│                                                                     │
+│   GitHub Issue ──► TRIAGE ──► IMPLEMENT ──► REVIEW ──► VALIDATE    │
+│        │              │           │            │           │         │
+│        │         classify    write fix    independent   run tests   │
+│        │         severity    run tests     code review  create PR   │
+│        │         find files  run linters   zero-trust   monitor CI  │
+│        │                         │            │                     │
+│        │                         ◄────────────┘                     │
+│        │                    (request changes → retry)               │
+│        │                                                  │         │
+│        │                                              REPORT        │
+│        │                                           interactive      │
+│        │                                           HTML evidence    │
+│        ▼                                                            │
+│   ┌──────────┐  Artifacts: execution.json, report.html,            │
+│   │ ESCALATE │  summary.md, progress.md, decision tree,            │
+│   │ to human │  action map, transcript                              │
+│   └──────────┘                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
 
-This project builds an engine that can:
+## What Does It Do?
 
-1. Take a GitHub issue describing a bug
-2. Triage it (classify, identify affected components, attempt reproduction)
-3. Implement a fix (write code, write tests, run linters)
-4. Self-review the fix (correctness, intent alignment, security, scope)
-5. Open a pull request with full documentation
-6. Produce interactive visual evidence of every decision and action taken
-7. Compare its fix against a known human fix (for validation)
+Given a GitHub issue describing a bug, the engine:
 
-The engine runs in **GitHub Actions** and is designed to eventually drive the entire SDLC for a GitHub organization.
+1. **Triages** it — classifies severity, identifies affected files, attempts reproduction
+2. **Implements** a fix — reads code, identifies root cause, writes a minimal patch, runs tests and linters
+3. **Self-reviews** the fix — independent zero-trust review for correctness, intent alignment, security, and scope
+4. **Validates** and opens a PR — verifies minimal diff, generates a detailed PR description, pushes to the target repo
+5. **Reports** — produces interactive HTML evidence (decision trees, action maps, execution traces)
+
+If the engine gets stuck, it **escalates to a human** with full context of everything it tried.
+
+The engine runs entirely in **GitHub Actions** — no local setup required for production use.
+
+## Production Results
+
+The engine has been validated against real [Konflux](https://github.com/konflux-ci) bugs with known human fixes.
+
+### KONFLUX-11443: Race Condition in FIPS Check
+
+**Bug**: The `fbc-fips-check-oci-ta` Tekton task failed inconsistently during parallel image processing — temp file paths collided when images shared identical `component-version-release` labels.
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│               HUMAN FIX vs RALPH LOOP FIX                           │
+│                                                                     │
+│  Metric              Human (PR #3057)     Ralph Loop                │
+│  ─────────────────── ─────────────────    ────────────────          │
+│  Root cause          ✓ Race condition     ✓ Race condition          │
+│  Fix strategy        image_num prefix     image_num suffix          │
+│  Files changed       1                    1                         │
+│  Lines changed       +19 / -18           +19 / -18                 │
+│  Path consistency    Perfect              99% (1 tag mismatch)      │
+│  PR documentation    Short commit msg     Full root cause + plan    │
+│  Time to fix         ~3 hours             2.8 minutes               │
+│  Review              1 human reviewer     Autonomous self-review    │
+│                                                                     │
+│  Grade               A                    A-                        │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+Both fixes identified the same root cause and used the same strategy (make temp paths unique per parallel job). The Ralph Loop matched the human's solution in **2.8 minutes** with better documentation. The human fix scored higher on precision — every path was perfectly consistent, while the Ralph Loop dropped a `:latest` suffix in one cleanup path.
+
+This analysis led directly to improvements: a **deterministic path-consistency checker** now catches these mismatches automatically (see [Continuous Improvement](#continuous-improvement)).
 
 ## What is a Ralph Loop?
 
-A Ralph Loop is our adaptation of the [Ralph Wiggum Loop](https://ghuntley.com/ralph/), an agentic iteration pattern created by Geoffrey Huntley in 2025. The core idea: run an AI agent in a loop, feed failures back as context, and iterate until an objective success criterion is met. **Iteration beats perfection; failures are data.**
+A Ralph Loop is our adaptation of the [Ralph Wiggum Loop](https://ghuntley.com/ralph/), an agentic iteration pattern created by Geoffrey Huntley in 2025. The core idea:
 
-Our production loop adds structure with a phased execution model:
+> Run an AI agent in a loop. Feed failures back as context. Iterate until an objective success criterion is met. **Iteration beats perfection; failures are data.**
 
-```
-OBSERVE → PLAN → ACT → VALIDATE → REFLECT → (repeat or escalate)
-```
-
-Rather than deploying many separate agent services that coordinate via side-channels, the Ralph Loop IS the agent. One loop execution encompasses all phases with specialized prompts and tools at each phase. See [SPEC.md §1.1](SPEC.md#11-what-is-a-ralph-loop) for the full explanation and [ARCHITECTURE.md](ARCHITECTURE.md) for the design rationale.
-
-## Project Structure
+Our production loop adds structure with a phased OODA execution model:
 
 ```
-rl-bug-fix-full-send/
-├── SPEC.md                    # Technical specification (read this first)
-├── ARCHITECTURE.md            # Architecture decisions
-├── IMPLEMENTATION-PLAN.md     # Phased build plan
-├── prompt.md                  # Meta ralph loop instruction file
-├── .github/workflows/         # GitHub Actions workflows
-│   ├── ralph-loop.yml         # Main engine workflow
-│   └── quality-scan.yml       # Weekly background quality scan
-├── engine/                    # Python engine package
-│   ├── __main__.py           # CLI entry point
-│   ├── config.py             # Configuration system
-│   ├── loop.py               # Ralph Loop core engine
-│   ├── phases/               # Phase implementations
-│   │   ├── base.py           # Base phase class
-│   │   ├── prompt_loader.py  # Jinja2 prompt template loading
-│   │   ├── triage.py         # Triage phase (classify, verify, reproduce)
-│   │   ├── implement.py      # Implementation phase (fix, test, lint)
-│   │   ├── review.py         # Review phase (correctness, intent, security, scope)
-│   │   ├── validate.py       # Validation phase (test, lint, minimal diff, PR)
-│   │   └── report.py         # Report phase (visual evidence generation)
-│   ├── secrets.py            # Secret management and redaction
-│   ├── golden_principles.py  # SPEC §7 enforcement (AST-based linter)
-│   ├── quality_scanner.py    # Background quality scanner (periodic scans)
-│   ├── integrations/         # External system adapters
-│   │   ├── llm.py            # LLM provider abstraction
-│   │   ├── github.py         # GitHub REST API adapter (IntegrationAdapter)
-│   │   ├── slack.py          # Slack Web API adapter (IntegrationAdapter)
-│   │   ├── jira.py           # Jira REST API adapter (IntegrationAdapter)
-│   │   └── discovery.py      # Integration discovery service (FR-4.8)
-│   ├── observability/        # Logging, tracing, metrics
-│   │   ├── logger.py         # Structured JSON logger
-│   │   ├── tracer.py         # Action tracing
-│   │   └── metrics.py        # Metrics collection
-│   ├── tools/                # Sandboxed tool execution
-│   │   ├── executor.py       # ToolExecutor + 7 tools
-│   │   └── extraction.py     # Deterministic tool extraction from LLM patterns
-│   ├── workflow/             # GitHub Actions self-monitoring
-│   │   └── monitor.py        # WorkflowMonitor + health checks
-│   └── visualization/        # Report generation
-├── templates/
-│   ├── prompts/              # Phase-specific LLM prompts
-│   └── visual-report/        # HTML report templates
-├── progress/
-│   ├── run-log.md            # Append-only meta loop run history
-│   └── index.html            # Auto-generated progress dashboard (gitignored)
-├── scripts/
-│   ├── setup-fork.sh         # Prepare test repo with known bug
-│   └── gen-progress.py       # Dashboard generator
-├── tests/                    # Test suite
-├── docs/                     # User and developer documentation
-├── pyproject.toml            # Python project config
-├── Makefile                  # Build targets
-└── ruff.toml                 # Linter config
+                    ┌──────────────────────────┐
+                    │      RALPH LOOP          │
+                    │                          │
+                    │   ┌──────────────────┐   │
+              ┌────►│   │    OBSERVE       │   │
+              │     │   │  gather context  │   │
+              │     │   └────────┬─────────┘   │
+              │     │            ▼              │
+              │     │   ┌──────────────────┐   │
+              │     │   │      PLAN        │   │
+              │     │   │   LLM analysis   │   │
+              │     │   └────────┬─────────┘   │
+              │     │            ▼              │
+              │     │   ┌──────────────────┐   │
+              │     │   │       ACT        │   │
+              │     │   │  execute tools   │   │
+              │     │   └────────┬─────────┘   │
+              │     │            ▼              │
+              │     │   ┌──────────────────┐   │
+              │     │   │    VALIDATE      │   │
+              │     │   │  check results   │   │
+              │     │   └────────┬─────────┘   │
+              │     │            ▼              │
+              │     │   ┌──────────────────┐   │
+              │     │   │    REFLECT       │   │──── Done? ──► EXIT
+              │     │   │ iterate/escalate │   │
+              │     │   └────────┬─────────┘   │
+              │     │            │              │
+              │     └────────────┼──────────────┘
+              │                  │
+              └──────────────────┘
+                   next phase
 ```
+
+Each phase (triage, implement, review, validate, report) runs this full OODA cycle independently. Phases validate each other with **zero trust** — the review phase re-reads the issue and diff from scratch rather than trusting the implementation phase's summary.
+
+### Two Levels of Loop
+
+| Loop | Where | Purpose |
+|------|-------|---------|
+| **Meta Loop** | Your laptop (Cursor, Claude Code, etc.) | Builds and iterates on the engine itself |
+| **Production Loop** | GitHub Actions | Executes the bug fix workflow against target repos |
+
+The meta loop built the production system over 51 iterations (see [progress/run-log.md](progress/run-log.md)). The production system then runs autonomously in CI.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                    GITHUB ACTIONS WORKFLOW                         │
+│  .github/workflows/ralph-loop.yml                                 │
+│                                                                   │
+│  ┌────────────┐   ┌──────────────┐   ┌──────────────────────┐   │
+│  │  Checkout   │──►│ Setup Python │──►│   Run Engine CLI     │   │
+│  │  + Clone    │   │  + uv        │   │   python -m engine   │   │
+│  └────────────┘   └──────────────┘   └──────────┬───────────┘   │
+│                                                  │                │
+│  ┌───────────────────────────────────────────────▼──────────┐    │
+│  │                    ENGINE (Python)                         │    │
+│  │                                                           │    │
+│  │  ┌─────────┐  ┌────────────────────────────────────────┐ │    │
+│  │  │  loop   │  │              PHASES                     │ │    │
+│  │  │  .py    │─►│  triage → implement → review → validate│ │    │
+│  │  │         │  │                  ▲         │            │ │    │
+│  │  │  OODA   │  │                  └─────────┘            │ │    │
+│  │  │  cycle  │  │              (reject → retry)           │ │    │
+│  │  └─────────┘  └────────────────────────────────────────┘ │    │
+│  │                                                           │    │
+│  │  ┌────────────┐  ┌──────────────┐  ┌──────────────────┐ │    │
+│  │  │   tools/   │  │integrations/ │  │ observability/   │ │    │
+│  │  │  executor  │  │ llm, github  │  │ logger, tracer   │ │    │
+│  │  │  7 tools   │  │ slack, jira  │  │ metrics          │ │    │
+│  │  └────────────┘  └──────────────┘  └──────────────────┘ │    │
+│  │                                                           │    │
+│  │  ┌────────────────────────────────────────────────────┐  │    │
+│  │  │             visualization/                          │  │    │
+│  │  │  report.html  decision_tree  action_map  comparison│  │    │
+│  │  └────────────────────────────────────────────────────┘  │    │
+│  └───────────────────────────────────────────────────────────┘    │
+│                                                                   │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │              ARTIFACTS (uploaded)                          │    │
+│  │  execution.json  log.json  progress.md  status.txt       │    │
+│  │  reports/report.html  reports/summary.md                  │    │
+│  │  transcripts/transcript.html  transcripts/calls.json     │    │
+│  └──────────────────────────────────────────────────────────┘    │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Engine Components
+
+| Layer | Module | Responsibility |
+|-------|--------|----------------|
+| **Orchestration** | `engine/loop.py` | Phase dispatch, transitions, iteration cap, time budget, escalation, retry backoff |
+| **Phases** | `engine/phases/` | Triage, implement, review, validate, report — each with OODA cycle |
+| **Tools** | `engine/tools/executor.py` | Sandboxed file ops, shell commands, git operations (7 tools) |
+| **LLM** | `engine/integrations/llm.py` | Gemini (primary) + Anthropic (fallback), provider-agnostic interface |
+| **Integrations** | `engine/integrations/` | GitHub, Slack, Jira adapters with injection guards |
+| **Observability** | `engine/observability/` | Structured JSON logging, action tracing, metrics, live narration |
+| **Visualization** | `engine/visualization/` | HTML reports, D3.js decision trees and action maps, comparison views |
+| **Security** | `engine/secrets.py` | Secret loading, validation, redaction across all outputs |
+| **Self-improvement** | `engine/golden_principles.py` | AST-based static analyzer enforcing 7 golden principles |
+
+### Phase Pipeline
+
+```
+┌──────────┐     ┌───────────┐     ┌──────────┐     ┌──────────┐     ┌──────────┐
+│  TRIAGE  │────►│ IMPLEMENT │────►│  REVIEW  │────►│ VALIDATE │────►│  REPORT  │
+│          │     │           │     │          │     │          │     │          │
+│ classify │     │ root cause│     │ zero-trust│    │ tests    │     │ HTML     │
+│ severity │     │ write fix │     │ correctness   │ lint     │     │ decision │
+│ find files│    │ test/lint │     │ security │     │ PR create│     │ tree     │
+│ reproduce│     │ iterate   │     │ scope    │     │ CI check │     │ action   │
+│          │     │           │     │          │     │          │     │ map      │
+└──────────┘     └───────────┘     └──────────┘     └──────────┘     └──────────┘
+                       ▲                 │
+                       │    reject       │
+                       └─────────────────┘
+                    (request_changes with
+                     specific suggestions)
+```
+
+Each phase uses **phase-specific prompts** (in `templates/prompts/`) and **phase-specific tool restrictions** (e.g., the review phase cannot write files or run shell commands — it can only read).
+
+### Security Model
+
+```
+┌──────────────────────────────────────────────────────┐
+│                  ZERO TRUST DESIGN                    │
+│                                                       │
+│  Issue body ─── UNTRUSTED ──► wrapped in delimiters  │
+│  Code diff  ─── UNTRUSTED ──► wrapped in delimiters  │
+│  Slack msgs ─── UNTRUSTED ──► wrapped in delimiters  │
+│  Jira data  ─── UNTRUSTED ──► wrapped in delimiters  │
+│                                                       │
+│  System prompts ─── TRUSTED (never contain user data) │
+│  Config         ─── TRUSTED (from repo, not user)     │
+│  Tool results   ─── VERIFIED (by each phase)          │
+│                                                       │
+│  Phase N does NOT trust Phase N-1's summary.          │
+│  Each phase re-reads source material independently.   │
+└──────────────────────────────────────────────────────┘
+```
+
+- **127 prompt injection tests** verify that untrusted content never leaks into system prompts
+- **59 security audit tests** verify commit signing, provenance recording, secret redaction
+- All secrets redacted from logs, traces, artifacts, and LLM transcripts
+
+## Continuous Improvement
+
+The engine improves itself through multiple feedback mechanisms:
+
+```
+Production Run                Analysis                    Improvement
+─────────────          ──────────────────          ─────────────────────
+execution.json ──────► deterministic checks ─────► prompt updates
+                       (path consistency,          (review.md, implement.md)
+                        paired operations)
+                                                   code safety nets
+                       LLM pattern detection ────► (review.py consistency
+                       (extraction.py)              checker)
+
+                       golden principles ─────────► AST-based enforcement
+                       (7 structural properties)    (golden_principles.py)
+
+                       quality scanner ───────────► weekly scan + auto PR
+                       (quality_scanner.py)         (.github/workflows/
+                                                     quality-scan.yml)
+```
+
+**Recent improvement (Run 51)**: After comparing the engine's fix for KONFLUX-11443 against the human fix, we identified that the self-review phase missed a subtle OCI tag mismatch (`:latest` dropped from a cleanup path). Three changes were made:
+
+1. **Review prompt** — added "Consistency of Paired Operations" as review dimension #6
+2. **Implement prompt** — added "Consistency Requirements" section for path/parameter alignment
+3. **Deterministic checker** — `_check_path_consistency()` in `review.py` runs post-LLM as a safety net, catching path mismatches the LLM might miss
 
 ## Quick Start
 
 ### Prerequisites
 
-1. **Python 3.12+** with `uv` package manager
-2. **GitHub CLI** (`gh`) installed and authenticated
-3. **API keys** for at least one LLM provider:
-   - `GEMINI_API_KEY` — Google Gemini (recommended for MVP)
-   - `ANTHROPIC_API_KEY` — Anthropic Claude (fallback)
+- **Python 3.12+** with `uv` package manager
+- **GitHub CLI** (`gh`) installed and authenticated
+- **API key**: `GEMINI_API_KEY` (recommended) or `ANTHROPIC_API_KEY`
 
-### Local Development
+### Run Locally
 
 ```bash
-# Install dependencies
+# Install
 uv pip install -e ".[dev]"
 
-# Run tests
+# Test
 make test
 
-# Run linter
+# Lint
 make lint
 
-# Run the engine (once implemented)
+# Run the engine
 python -m engine --issue-url <ISSUE_URL> --target-repo <PATH> --output-dir ./output
 ```
 
-### GitHub Actions Setup
+### Run in GitHub Actions
 
-To run the engine in GitHub Actions, you need these repository secrets:
+1. Set repository secrets:
 
 | Secret | Required | Description |
 |--------|----------|-------------|
 | `GEMINI_API_KEY` | Yes | Google Gemini API key |
-| `GH_PAT` | Yes | GitHub Personal Access Token with `repo` scope |
-| `ANTHROPIC_API_KEY` | No | Anthropic API key (fallback) |
-| `SLACK_BOT_TOKEN` | No | Slack bot token for notifications and channel reading |
-| `JIRA_API_TOKEN` | No | Jira API token (Cloud) or PAT (Data Center) |
-| `JIRA_USER_EMAIL` | No | Jira user email (required for Cloud basic auth) |
+| `GH_PAT` | Yes | GitHub PAT with `repo` scope |
+| `ANTHROPIC_API_KEY` | No | Fallback LLM |
+| `SLACK_BOT_TOKEN` | No | Slack notifications |
+| `JIRA_API_TOKEN` | No | Jira integration |
 
-Then trigger the workflow:
-1. Go to Actions → "Ralph Loop - Bug Fix Engine"
-2. Click "Run workflow"
-3. Enter the issue URL and any optional parameters
+2. Go to **Actions** → **Ralph Loop - Bug Fix Engine** → **Run workflow**
+3. Enter the issue URL and optional parameters
 4. View results in the workflow artifacts
 
-### Preparing a Test Scenario
-
-To test against a known-solved bug:
+### Test Against a Known Bug
 
 ```bash
 # Fork a repo and roll back to before the fix
 ./scripts/setup-fork.sh \
-  konflux-ci/build-service \
+  konflux-ci/build-definitions \
   your-org \
   <commit-before-fix> \
-  https://github.com/konflux-ci/build-service/issues/123
+  https://github.com/konflux-ci/build-definitions/issues/123
+
+# Trigger the engine via meta-loop runner
+./scripts/meta-loop.sh --issue-url <FORK_ISSUE_URL>
 ```
 
-## GitHub Prerequisites Checklist
+## Project Structure
 
-Before running the production ralph loop in GitHub Actions, complete these steps:
-
-- [ ] **Create a GitHub repository** for this project (or push to an existing one)
-- [ ] **Set up repository secrets**:
-  - `GEMINI_API_KEY` — Get from [Google AI Studio](https://aistudio.google.com/)
-  - `GH_PAT` — Create at GitHub → Settings → Developer Settings → Personal Access Tokens → Fine-grained tokens. Needs `repo` scope on target repositories
-  - `ANTHROPIC_API_KEY` (optional) — Get from [Anthropic Console](https://console.anthropic.com/)
-- [ ] **Enable GitHub Actions** in the repository settings
-- [ ] **Select a Konflux bug to test against** — Ralph Bean committed to picking one or two complex bugs with known fixes
-- [ ] **Fork the target Konflux repo** and roll back the fix commit using `scripts/setup-fork.sh`
-- [ ] **Configure branch protection** on the fork's default branch (recommended: require PR reviews, require status checks)
-
-## How to Build This System (Meta Ralph Loop)
-
-This project is designed to be built iteratively using a ralph loop on your laptop:
-
-1. Open `prompt.md` in your coding agent (Cursor, Claude Code, OpenCode, etc.)
-2. The prompt instructs the agent to read the specs and build the system phase by phase
-3. Each phase produces testable, working output
-4. Run `make check` after each phase to verify
-
-The meta loop builds the production system. The production system runs in GitHub Actions.
-
-### Meta Loop Observability
-
-The meta loop has its own observability stack so you always know what's happening:
-
-- **`progress/run-log.md`** — Append-only record of every loop run. Each entry captures: what phase was worked on, what shipped, test results, architectural decisions made, issues encountered, and the next focus item. This is the single source of truth for build history.
-- **`progress/index.html`** — Auto-generated dashboard showing overall progress, per-phase breakdown, test/lint status, and run history. Generated by `make progress` or `python scripts/gen-progress.py`.
-- **`IMPLEMENTATION-PLAN.md`** — Phase items marked with ✅ as completed. Shows at a glance where the build stands.
-
-After any loop run, check the state:
-```bash
-# Regenerate the dashboard (the loop does this as a closing step)
-make progress
-
-# Open in browser
-open progress/index.html   # macOS
-xdg-open progress/index.html  # Linux
+```
+rl-bug-fix-full-send/
+├── SPEC.md                         # Technical specification
+├── ARCHITECTURE.md                 # Architecture decisions (6 ADRs)
+├── IMPLEMENTATION-PLAN.md          # Phased build plan (7 phases + hardening)
+├── prompt.md                       # Meta ralph loop instruction file
+│
+├── .github/workflows/
+│   ├── ralph-loop.yml              # Main engine workflow
+│   └── quality-scan.yml            # Weekly background quality scan
+│
+├── engine/                         # Python engine package
+│   ├── __main__.py                 # CLI entry point
+│   ├── config.py                   # Configuration system
+│   ├── loop.py                     # Ralph Loop core engine
+│   ├── secrets.py                  # Secret management + redaction
+│   ├── golden_principles.py        # AST-based linter (7 principles)
+│   ├── quality_scanner.py          # Background quality scanner
+│   │
+│   ├── phases/                     # Phase implementations
+│   │   ├── base.py                 #   Base phase class (OODA cycle)
+│   │   ├── prompt_loader.py        #   Jinja2 prompt template loading
+│   │   ├── triage.py               #   Classify, verify, reproduce
+│   │   ├── implement.py            #   Root cause, fix, test, lint
+│   │   ├── review.py               #   Independent zero-trust review
+│   │   ├── validate.py             #   Tests, lint, PR creation
+│   │   └── report.py               #   Visual evidence generation
+│   │
+│   ├── integrations/               # External system adapters
+│   │   ├── llm.py                  #   Gemini + Anthropic providers
+│   │   ├── github.py               #   Issues, PRs, CI, commit signing
+│   │   ├── slack.py                #   Notifications, channel monitoring
+│   │   ├── jira.py                 #   Issues, comments, transitions
+│   │   └── discovery.py            #   Auto-detect available integrations
+│   │
+│   ├── observability/              # Logging, tracing, metrics
+│   │   ├── logger.py               #   JSON logger + live narration
+│   │   ├── tracer.py               #   Action recording
+│   │   ├── metrics.py              #   Counters and gauges
+│   │   └── transcript.py           #   LLM call transcript recording
+│   │
+│   ├── tools/                      # Sandboxed tool execution
+│   │   ├── executor.py             #   ToolExecutor + 7 tools
+│   │   ├── extraction.py           #   Pattern detection + proposals
+│   │   └── test_runner.py          #   Auto-detect test/lint commands
+│   │
+│   ├── workflow/                    # GitHub Actions self-monitoring
+│   │   └── monitor.py              #   CI health checks, step failures
+│   │
+│   └── visualization/              # Report generation
+│       ├── report_generator.py     #   HTML via Jinja2 + D3.js
+│       ├── decision_tree.py        #   Interactive decision tree
+│       ├── action_map.py           #   Layered phase action map
+│       ├── comparison.py           #   Agent vs human fix comparison
+│       └── publisher.py            #   Report assembly + publishing
+│
+├── templates/
+│   ├── prompts/                    # Phase-specific LLM prompts
+│   │   ├── triage.md
+│   │   ├── implement.md
+│   │   ├── review.md
+│   │   ├── validate.md
+│   │   └── report.md
+│   └── visual-report/              # HTML report templates
+│
+├── scripts/
+│   ├── setup-fork.sh               # Fork + rollback for testing
+│   ├── meta-loop.sh                # CI runner (trigger → monitor → analyze)
+│   └── gen-progress.py             # Dashboard generator
+│
+├── tests/                          # 1945+ tests
+│   ├── test_loop.py                #   55 loop behavior tests
+│   ├── test_e2e.py                 #   46 end-to-end pipeline tests
+│   ├── test_prompt_injection.py    #   127 injection defense tests
+│   ├── test_security_audit.py      #   59 security property tests
+│   └── ...                         #   Phase, integration, visualization tests
+│
+├── progress/
+│   ├── run-log.md                  # 51 meta loop runs documented
+│   └── index.html                  # Auto-generated dashboard (gitignored)
+│
+├── meta-loop-runs/                 # Production run artifacts (gitignored)
+│
+├── pyproject.toml                  # Python project config
+├── Makefile                        # Build targets
+└── ruff.toml                       # Linter config
 ```
 
-## Current Build Status
+## Execution Traceability
 
-**Phase 0: Foundation** — Complete (all sub-phases 0.1–0.5 done)
-**Phase 1: Core Loop Engine** — Complete (all sub-phases 1.1–1.6 done)
-**Phase 2: GitHub Actions Integration** — Complete (all sub-phases 2.1–2.4 done)
-**Phase 3: Visualization and Reporting** — Complete (all sub-phases 3.1–3.5 done)
-**Phase 4: Integration Layer** — Complete (all sub-phases 4.1–4.4 done)
-**Phase 5: Hardening and Testing** — Complete (all sub-phases 5.1–5.4 done)
-**Phase 6: Self-Improvement Infrastructure** — Complete (all sub-phases 6.1–6.3 done)
-**Phase 7: Production Observability & Feedback Loops** — Complete (18 deficiencies cataloged from 5 production runs, all 18 resolved)
+Every run produces full traceability regardless of success or failure:
 
-| Component | Status | Module |
-|-----------|--------|--------|
-| Package setup | ✅ | `pyproject.toml`, `Makefile`, `ruff.toml` |
-| LLM provider abstraction | ✅ | `engine/integrations/llm.py` |
-| Structured logging & tracing | ✅ | `engine/observability/` |
-| Configuration system | ✅ | `engine/config.py` — includes per-phase config (`PhasesConfig`) |
-| Tool executor | ✅ | `engine/tools/executor.py` |
-| Loop orchestrator | ✅ | `engine/loop.py` — phase registry, dispatch, transitions, escalation, exponential retry backoff |
-| Phase framework | ✅ | `engine/phases/base.py`, `engine/phases/prompt_loader.py` — prompt loading, tool sets, config wiring |
-| Triage phase | ✅ | `engine/phases/triage.py` — classify, verify components, attempt reproduction, issue fetch with GitHub API fallback |
-| Implementation phase | ✅ | `engine/phases/implement.py` — analyze code, generate fix, inner iteration loop, test/lint, retry adaptation, LLM parse retry with validation |
-| Review phase | ✅ | `engine/phases/review.py` — independent review: correctness, intent, security, scope |
-| Validation phase | ✅ | `engine/phases/validate.py` — full test suite, CI checks, minimal diff, PR creation |
-| Report phase | ✅ | `engine/phases/report.py` — visual evidence generation via ReportPublisher, non-blocking (always succeeds) |
-| GH Actions workflow | ✅ | `.github/workflows/ralph-loop.yml` — workflow_dispatch, config overrides, full artifact upload (execution.json, log.json, progress.md, reports/, transcripts/, status.txt) |
-| Self-monitoring | ✅ | `engine/workflow/monitor.py` — CI health checks, step failure detection, workflow context |
-| Secret management | ✅ | `engine/secrets.py` — `SecretManager` + `SecretRedactor`, env var validation, redaction in logs/traces/tools |
-| Fork & rollback script | ✅ | `scripts/setup-fork.sh` — fork repo, rollback to pre-fix commit, JSON summary output |
-| CLI entry point | ✅ | `engine/__main__.py` — `--config-override` inline YAML, `--config` file, secret validation, full arg wiring |
-| Report generator | ✅ | `engine/visualization/report_generator.py` — reads execution.json, produces self-contained HTML via Jinja2 |
-| Decision tree visualization | ✅ | `engine/visualization/decision_tree.py` — transforms execution log into interactive D3.js tree |
-| Action map visualization | ✅ | `engine/visualization/action_map.py` — layered phase map with D3.js, data flow edges, token-sized nodes |
-| Comparison report | ✅ | `engine/visualization/comparison.py` — side-by-side diff, file overlap, similarity metrics, AI analysis |
-| Report publishing | ✅ | `engine/visualization/publisher.py` — `ReportPublisher` + CLI, summary.md, artifact manifest, GitHub Pages deployment |
-| Integration adapter protocol | ✅ | `engine/integrations/__init__.py` — `IntegrationAdapter` protocol with discover/read/write/search |
-| GitHub integration (enhanced) | ✅ | `engine/integrations/github.py` — `GitHubAdapter`: issues, PRs, comments, labels, CI status, commit signing |
-| Slack integration | ✅ | `engine/integrations/slack.py` — `SlackAdapter`: notifications, channel history, injection guards |
-| Jira integration | ✅ | `engine/integrations/jira.py` — `JiraAdapter`: read issues, post comments, transitions, JQL search, injection guards |
-| Discovery service | ✅ | `engine/integrations/discovery.py` — `DiscoveryService`: enumerate integrations, probe auth, LLM catalog |
-| Integrations config | ✅ | `engine/config.py` — `IntegrationsConfig` with GitHub, Slack, Jira sub-configs + YAML loading |
-| Prompt injection testing | ✅ | `tests/test_prompt_injection.py` — 127 tests: payload catalog, delimiter wrapping, escape containment, system prompt isolation, integration guards, phase tool restrictions, fail-closed, zero-trust, regression vectors |
-| Loop behavior testing | ✅ | `tests/test_loop.py` — 55 tests: iteration cap enforcement (boundary, retries, backtrack), time budget enforcement (monkeypatched time, mid-loop expiry), escalation behavior (all paths, context recording, status values), phase validation independence (per-phase tool filtering, prior results, executor isolation) |
-| End-to-end testing | ✅ | `tests/test_e2e.py` — 46 tests: 3 simulated Konflux bugs (Go nil pointer, Python import, YAML typo), full pipeline, comparison mode, metrics/observability, report generation, robustness, cross-scenario quality |
-| Security audit | ✅ | `tests/test_security_audit.py` — 59 tests: commit signing verification, provenance recording (all phases), secrets never in logs/artifacts, untrusted content separation in all LLM calls, cross-cutting security properties |
-| Golden principles enforcement | ✅ | `engine/golden_principles.py` — AST-based static analyzer: P1 logging, P3 untrusted separation, P5 iteration bounds, P8 provenance, P9 report publishing, P10 config usage. `make principles` CI gate |
-| Deterministic tool extraction | ✅ | `engine/tools/extraction.py` — `PatternDetector` + `ProposalGenerator`: scans execution records for repeated LLM patterns, proposes deterministic replacements (5 categories + caching fallback). CLI: `python -m engine.tools.extraction` |
-| Test runner detection | ✅ | `engine/tools/test_runner.py` — `detect_repo_stack()`: detects target repo language from manifests (go.mod, package.json, Cargo.toml, pyproject.toml) and file extensions, returns language-specific test/lint commands. Configurable via `test_command`/`lint_command` overrides in `.rl-config.yaml` |
-| Cross-phase stack handoff | ✅ | Triage serializes `RepoStack` into `PhaseResult.artifacts["detected_stack"]`. Implement and validate inherit via `_extract_triage_stack()` — prevents re-detection errors from truncated file listings (D17) |
-| Test execution mode (CI-first) | ✅ | `test_execution_mode` config field (`disabled`/`opportunistic`/`required`) on both implement and validate phases. Defaults to `disabled` — tests skipped locally, CI validates after PR. Auto-promotes to `opportunistic` when `test_command` configured |
-| Review progressive leniency | ✅ | Review phase counts prior review iterations, injects pragmatic review context on 2nd+, auto-approves nit-only findings, prior review history summarized for LLM. Escalation threshold raised to 5 |
-| Meta-loop runner | ✅ | `scripts/meta-loop.sh` — triggers workflow, monitors, downloads artifacts, analyzes execution.json, supports continuous mode for iterating until success |
-| Background quality scanner | ✅ | `engine/quality_scanner.py` — `BackgroundQualityScanner`: periodic scans combining golden principles, extraction proposals, code metrics. Auto-generates refactoring PR bodies. Weekly cron workflow. CLI: `python -m engine.quality_scanner` |
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    TRACEABILITY OUTPUTS                          │
+│                                                                  │
+│  REAL-TIME (GitHub Actions log)                                  │
+│  ├── >>> [TRIAGE] Classified as bug (confidence: 0.85)          │
+│  ├── >>> [IMPLEMENT] Fix strategy: make paths unique. 1 file.   │
+│  ├── >>> [REVIEW] Verdict: approve. 1 nit finding.              │
+│  └── >>> [VALIDATE] PR created. CI status: pending.             │
+│                                                                  │
+│  ARTIFACTS (downloadable)                                        │
+│  ├── execution.json ─── complete machine-readable execution log │
+│  ├── progress.md    ─── running human-readable narrative        │
+│  ├── summary.md     ─── iteration trace (→ GH step summary)    │
+│  ├── report.html    ─── interactive D3.js visualizations        │
+│  ├── log.json       ─── structured JSON logs                    │
+│  ├── transcript.html─── LLM call transcripts                    │
+│  └── status.txt     ─── final status (success/escalated/error)  │
+│                                                                  │
+│  ON CRASH                                                        │
+│  ├── Which OODA step failed (observe/plan/act/validate/reflect) │
+│  ├── Partial context gathered before the crash                   │
+│  └── Full Python traceback                                       │
+└─────────────────────────────────────────────────────────────────┘
+```
 
-**1945 tests passing**, lint clean, golden principles PASS. **18 production deficiencies** identified and cataloged in Phase 7 — all 18 resolved. Review progressive leniency and meta-loop runner added for production iteration.
+## Development History
 
-### Cross-Fork PR Workflow
+The system was built iteratively over **51 meta loop runs** using a ralph loop on a laptop:
 
-The engine supports the standard open-source contribution model: fork the target repo, push a fix branch to your fork, then open a PR from `fork_owner:branch` into upstream `main`. Configure via the `fork_repo` workflow input.
+| Phase | Description | Status |
+|-------|-------------|--------|
+| **Phase 0** | Foundation (package, LLM, logging, config, tools) | Complete |
+| **Phase 1** | Core loop engine (orchestrator, 5 phases) | Complete |
+| **Phase 2** | GitHub Actions (workflow, monitoring, secrets) | Complete |
+| **Phase 3** | Visualization (reports, decision tree, action map, comparison) | Complete |
+| **Phase 4** | Integrations (GitHub, Slack, Jira, discovery) | Complete |
+| **Phase 5** | Hardening (injection tests, e2e tests, security audit) | Complete |
+| **Phase 6** | Self-improvement (golden principles, extraction, quality scanner) | Complete |
+| **Phase 7** | Production observability (18 deficiencies found and fixed from live runs) | Complete |
+| **Post-7** | KONFLUX-11443 validation, path-consistency checker, review hardening | Complete |
 
-### Execution Traceability
+**1945+ tests passing**, lint clean, golden principles enforced.
 
-Every execution produces full traceability regardless of where the engine succeeds or fails:
+Key milestones from the development journey:
 
-- **Live narration** — human-readable `>>> [PHASE] message` lines printed to stderr during execution, visible in real-time in GitHub Actions logs. Each OODA step in every phase emits a 1–2 sentence summary explaining what the engine is doing (e.g., `>>> [TRIAGE] Classified as bug (confidence: 0.85, severity: high).`)
-- **Running progress.md** — a markdown file continuously appended during execution with per-iteration headings and bullet-point narrations, uploaded as an artifact for post-hoc review
-- **Iteration trace in summary.md** — each phase iteration is logged with duration, pass/fail status, escalation reasons (with LLM reasoning), and key findings rendered as human-readable bullet points (dicts as `key: value`, lists as comma-separated items — no raw JSON)
-- **Crash context capture** — if a phase crashes mid-cycle, the execution record includes which OODA step failed (observe/plan/act/validate/reflect), what partial context was gathered before the crash, and the traceback
-- **Findings and artifacts in execution.json** — each iteration now records the phase's `findings` and `artifacts` dicts (truncated to prevent bloat) so you can see what the LLM returned, what components were identified, what files were read
-- **Plain-English narrative** — `report.html` and `summary.md` both open with a deterministic narrative paragraph summarising what happened: issue processed, triage classification, implementation attempts, review verdict, and final status — no LLM call required
-- **GitHub Actions step summary** — `summary.md` is piped to `$GITHUB_STEP_SUMMARY` so traceability is visible directly in the workflow run without downloading artifacts
+- **Run 1–10**: Foundation and core loop engine built
+- **Run 11–30**: GitHub Actions integration, visualization, and reporting
+- **Run 31–40**: Integration layer (GitHub, Slack, Jira) and hardening
+- **Run 41–50**: Production observability — 18 deficiencies cataloged from live runs and all resolved (issue fetching, retry adaptation, review leniency, live narration, stack detection handoff, CI-first testing)
+- **Run 51**: Post-mortem of KONFLUX-11443 human-vs-AI comparison, deterministic path-consistency checker added
 
 ## Design Principles
 
-From the [fullsend](../fullsend/) project's security threat model and architecture:
-
-- **Security is the foundation** — every component designed with adversarial thinking
-- **Zero trust between phases** — each phase validates independently
-- **The repo is the coordinator** — branch protection and CODEOWNERS make merge decisions
-- **Demos are a byproduct** — the system generates its own visual evidence
+- **Security is the foundation** — adversarial thinking in every component, 127 injection tests
+- **Zero trust between phases** — each phase validates independently, re-reads sources
+- **The repo is the coordinator** — branch protection and CODEOWNERS decide what merges
+- **Demos are a byproduct** — every execution generates its own visual evidence
 - **Everything is auditable** — every action logged, every decision traceable
 - **Technology agnostic** — LLM provider, agent runtime, and target stack are all swappable
-
-## Relationship to Fullsend
-
-This project implements the MVP described in the [fullsend](../fullsend/) exploration:
-- **Bug fix workflow** (Phase 1 scope from the team meeting)
-- **GitHub Actions as infrastructure** (one of the infrastructure options explored)
-- **Ralph Loop as the agent model** (single loop > multi-agent services, see ARCHITECTURE.md)
-- **Security model** aligned with fullsend's threat model (5 threats, 7 principles)
-- **Provenance and supply chain** compatible with Konflux/SLSA/Enterprise Contract
+- **Iteration beats perfection** — failures are data, not dead ends
 
 ## Documentation
 
-- [SPEC.md](SPEC.md) — Full technical specification
-- [ARCHITECTURE.md](ARCHITECTURE.md) — Architecture decisions and rationale
-- [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) — Phased build plan
-- [prompt.md](prompt.md) — Meta ralph loop instructions
-- [progress/run-log.md](progress/run-log.md) — Meta loop run history
-- `progress/index.html` — Progress dashboard (`make progress` to generate)
+| Document | Purpose |
+|----------|---------|
+| [SPEC.md](SPEC.md) | Full technical specification |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Architecture decisions and rationale (6 ADRs) |
+| [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | Phased build plan with completion status |
+| [prompt.md](prompt.md) | Meta ralph loop instructions |
+| [progress/run-log.md](progress/run-log.md) | Append-only history of all 51 meta loop runs |

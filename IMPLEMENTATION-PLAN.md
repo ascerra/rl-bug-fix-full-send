@@ -320,6 +320,34 @@ Phased build plan. Each phase produces usable, testable output. Phases are desig
 - Supports `--fork-repo`, `--provider`, `--config` overrides
 - Auto-detects GitHub repo from git remote
 
+### Deterministic Path-Consistency Checker ✅
+- `engine/phases/review.py` — `_check_path_consistency()` post-LLM safety net in the review `act()` phase
+- Regex-based extraction of file/directory paths from shell scripts (handles `${var}` interpolation)
+- Categorizes paths by operation type: create (skopeo copy, mkdir), cleanup (rm -rf), reference (umoci, check-payload, grep)
+- Detects OCI tag mismatches (e.g., creation uses `:latest` but cleanup omits it)
+- Injects findings and downgrades `approve` → `request_changes` when consistency issues found
+- Helper functions: `_strip_oci_tag()`, `_has_oci_tag()`, `_extract_path_bases()`
+- Motivated by KONFLUX-11443 post-mortem: Ralph Loop run 23617134590 dropped `:latest` from OCI cleanup path, self-review missed it
+
+### Review Prompt: Paired-Operation Consistency ✅
+- `templates/prompts/review.md` — added review dimension #6 "Consistency of Paired Operations"
+- Instructs LLM to verify creation paths match cleanup/deletion paths exactly (including OCI tag suffixes)
+- Call site consistency: function parameter ordering must match signature at all call sites
+- Severity callout: path mismatches are correctness issues, not style nits
+
+### Implement Prompt: Consistency Requirements ✅
+- `templates/prompts/implement.md` — added "Consistency Requirements" section
+- Path consistency: modifications to creation ops must apply identically to cleanup/deletion ops
+- Parameter ordering: follow existing codebase conventions when adding new function parameters
+- Call site updates: verify every call site when changing a function signature
+
+### KONFLUX-11443 Production Validation ✅
+- Engine validated against KONFLUX-11443 (race condition in fbc-fips-check-oci-ta parallel processing)
+- Two successful production runs: 23615068030 (2.5 min) and 23617134590 (2.8 min, created PR)
+- Fix matched human PR #3057 strategy (unique image_num per parallel job)
+- Graded A- vs human A — deducted for path consistency gap that review didn't catch
+- Post-mortem led to the three improvements above
+
 ## Production Hardening (post-build fixes from live runs)
 
 ### Cross-Fork PR Workflow ✅
