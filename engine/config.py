@@ -14,7 +14,7 @@ class LLMConfig:
     provider: str = "gemini"
     model: str = "gemini-2.5-pro"
     temperature: float = 0.2
-    max_tokens: int = 8192
+    max_tokens: int = 65536
     fallback_provider: str = "anthropic"
     fallback_model: str = "claude-sonnet-4-20250514"
 
