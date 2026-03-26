@@ -36,6 +36,7 @@ class LLMProvider(Protocol):
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.2,
         max_tokens: int = 8192,
+        json_mode: bool = False,
     ) -> LLMResponse: ...
 
 
@@ -56,6 +57,7 @@ class MockProvider:
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.2,
         max_tokens: int = 8192,
+        json_mode: bool = False,
     ) -> LLMResponse:
         start = time.monotonic()
         response_text = self._responses[self._call_count % len(self._responses)]
@@ -109,6 +111,7 @@ class GeminiProvider:
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.2,
         max_tokens: int = 8192,
+        json_mode: bool = False,
     ) -> LLMResponse:
         self._ensure_client()
         start = time.monotonic()
@@ -117,18 +120,57 @@ class GeminiProvider:
         for msg in messages:
             contents.append({"role": msg.get("role", "user"), "parts": [{"text": msg["content"]}]})
 
+        config: dict[str, Any] = {
+            "system_instruction": system_prompt,
+            "temperature": temperature,
+            "max_output_tokens": max_tokens,
+        }
+        if json_mode:
+            config["response_mime_type"] = "application/json"
+
         response = self._client.models.generate_content(
             model=self.model,
             contents=contents,
-            config={
-                "system_instruction": system_prompt,
-                "temperature": temperature,
-                "max_output_tokens": max_tokens,
-            },
+            config=config,
         )
 
         elapsed = (time.monotonic() - start) * 1000
-        text = response.text or ""
+
+        text = ""
+        try:
+            text = response.text or ""
+        except ValueError:
+            pass
+
+        if not text:
+            candidates = getattr(response, "candidates", None)
+            if candidates:
+                candidate = candidates[0]
+                finish_reason = getattr(candidate, "finish_reason", "UNKNOWN")
+                parts = getattr(getattr(candidate, "content", None), "parts", [])
+                part_texts = []
+                for part in parts:
+                    t = getattr(part, "text", None)
+                    if t:
+                        part_texts.append(t)
+                if part_texts:
+                    text = "\n".join(part_texts)
+                else:
+                    import sys
+                    print(
+                        f">>> [GEMINI-DIAG] Empty response. "
+                        f"finish_reason={finish_reason}, "
+                        f"parts_count={len(parts)}, "
+                        f"candidate_fields={[a for a in dir(candidate) if not a.startswith('_')]}",
+                        file=sys.stderr,
+                    )
+            else:
+                import sys
+                print(
+                    f">>> [GEMINI-DIAG] No candidates in response. "
+                    f"response_fields={[a for a in dir(response) if not a.startswith('_')]}",
+                    file=sys.stderr,
+                )
 
         usage = getattr(response, "usage_metadata", None)
         tokens_in = getattr(usage, "prompt_token_count", 0) or 0 if usage else 0
@@ -171,6 +213,7 @@ class AnthropicProvider:
         tools: list[dict[str, Any]] | None = None,
         temperature: float = 0.2,
         max_tokens: int = 8192,
+        json_mode: bool = False,
     ) -> LLMResponse:
         self._ensure_client()
         start = time.monotonic()

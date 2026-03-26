@@ -61,7 +61,7 @@ class ImplementPhaseConfig:
     max_inner_iterations: int = 5
     run_tests_after_each_edit: bool = True
     run_linters: bool = True
-    max_parse_retries: int = 1
+    max_parse_retries: int = 3
     test_command: str = ""
     lint_command: str = ""
 

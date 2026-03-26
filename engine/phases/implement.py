@@ -405,6 +405,7 @@ class ImplementPhase(Phase):
                 messages=[{"role": "user", "content": retry_message}],
                 temperature=self.config.llm.temperature,
                 max_tokens=self.config.llm.max_tokens,
+                json_mode=True,
             )
 
             self.record_llm_call(
@@ -895,24 +896,34 @@ def _format_review_feedback(feedback: dict[str, Any]) -> str:
 def parse_implement_response(content: str) -> dict[str, Any]:
     """Extract structured implementation JSON from an LLM response.
 
-    Tries direct JSON parse, then ``json`` code-block extraction, then
-    generic code-block extraction. Returns a default empty-plan on parse failure.
+    Tries (in order):
+      1. Direct JSON parse
+      2. Strip leading/trailing whitespace and non-JSON preamble
+      3. ``json`` code-block extraction
+      4. Generic code-block extraction
+      5. Find first ``{`` to last ``}`` brute-force extraction
+    Returns a default empty-plan on parse failure.
     """
+    if not content or not content.strip():
+        return _EMPTY_PLAN("Empty LLM response")
+
+    stripped = content.strip()
+
     try:
-        return json.loads(content)
+        return json.loads(stripped)
     except (json.JSONDecodeError, TypeError):
         pass
 
-    if "```json" in content:
+    if "```json" in stripped:
         try:
-            start = content.index("```json") + len("```json")
-            end = content.index("```", start)
-            return json.loads(content[start:end].strip())
+            start = stripped.index("```json") + len("```json")
+            end = stripped.index("```", start)
+            return json.loads(stripped[start:end].strip())
         except (json.JSONDecodeError, ValueError):
             pass
 
-    if "```" in content:
-        parts = content.split("```")
+    if "```" in stripped:
+        parts = stripped.split("```")
         for i in range(1, len(parts), 2):
             text = parts[i].strip()
             if text.startswith("json"):
@@ -922,9 +933,22 @@ def parse_implement_response(content: str) -> dict[str, Any]:
             except json.JSONDecodeError:
                 continue
 
+    first_brace = stripped.find("{")
+    last_brace = stripped.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        candidate = stripped[first_brace : last_brace + 1]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            pass
+
+    return _EMPTY_PLAN(content[:500])
+
+
+def _EMPTY_PLAN(raw_snippet: str) -> dict[str, Any]:
     return {
         "root_cause": "unknown",
-        "fix_description": f"Failed to parse LLM response. Raw: {content[:500]}",
+        "fix_description": f"Failed to parse LLM response. Raw: {raw_snippet}",
         "files_changed": [],
         "file_changes": [],
         "test_added": "",

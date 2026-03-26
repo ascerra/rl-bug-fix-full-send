@@ -1817,7 +1817,7 @@ class TestParseWithRetry:
 
     @pytest.mark.asyncio
     async def test_both_attempts_fail_returns_best(self):
-        """When both attempts fail, returns the better one (parsed > parse failure)."""
+        """When all retry attempts fail, returns the better one (parsed > parse failure)."""
         partial_response = json.dumps(
             {
                 "root_cause": "some cause",
@@ -1826,9 +1826,12 @@ class TestParseWithRetry:
                 "confidence": 0.5,
             }
         )
+        config = EngineConfig()
+        config.phases.implement.max_parse_retries = 1
         phase = _make_implement(
             responses=["not json", partial_response],
             tool_executor=None,
+            config=config,
         )
         obs = await phase.observe()
         plan = await phase.plan(obs)
@@ -1837,10 +1840,13 @@ class TestParseWithRetry:
 
     @pytest.mark.asyncio
     async def test_both_attempts_total_failure(self):
-        """When both attempts produce garbage, returns the original parse failure."""
+        """When all retry attempts produce garbage, returns the original parse failure."""
+        config = EngineConfig()
+        config.phases.implement.max_parse_retries = 1
         phase = _make_implement(
             responses=["not json 1", "not json 2"],
             tool_executor=None,
+            config=config,
         )
         obs = await phase.observe()
         plan = await phase.plan(obs)
@@ -1992,7 +1998,7 @@ class TestRefinementParseRetry:
 class TestConfigMaxParseRetries:
     def test_default_value(self):
         cfg = EngineConfig()
-        assert cfg.phases.implement.max_parse_retries == 1
+        assert cfg.phases.implement.max_parse_retries == 3
 
     def test_yaml_override(self):
         from engine.config import load_config
