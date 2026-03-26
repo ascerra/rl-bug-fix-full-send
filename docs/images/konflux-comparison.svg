@@ -1,0 +1,97 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <filter id="comp-shadow" x="-2%" y="-2%" width="104%" height="108%">
+      <feDropShadow dx="0" dy="2" stdDeviation="3" flood-opacity="0.1"/>
+    </filter>
+  </defs>
+
+  <style>
+    .comp-title { font-size: 16px; font-weight: 700; fill: #1e293b; }
+    .comp-sub { font-size: 11px; fill: #64748b; }
+    .header-cell { font-size: 11px; font-weight: 700; fill: #fff; }
+    .row-label { font-size: 11px; font-weight: 600; fill: #334155; }
+    .cell-text { font-size: 11px; fill: #475569; }
+    .grade-a { font-size: 20px; font-weight: 800; }
+    .win-bg { fill: #dcfce7; }
+    .tie-bg { fill: #f1f5f9; }
+  </style>
+
+  <text x="360" y="28" text-anchor="middle" class="comp-title">KONFLUX-11443: Human Fix vs Ralph Loop</text>
+  <text x="360" y="48" text-anchor="middle" class="comp-sub">Race condition in fbc-fips-check-oci-ta parallel image processing</text>
+
+  <!-- Table -->
+  <!-- Header row -->
+  <rect x="30" y="65" width="200" height="32" rx="6" fill="#475569"/>
+  <text x="130" y="86" text-anchor="middle" class="header-cell">Metric</text>
+  <rect x="235" y="65" width="220" height="32" rx="6" fill="#3b82f6"/>
+  <text x="345" y="86" text-anchor="middle" class="header-cell">Human Fix (PR #3057)</text>
+  <rect x="460" y="65" width="230" height="32" rx="6" fill="#8b5cf6"/>
+  <text x="575" y="86" text-anchor="middle" class="header-cell">Ralph Loop (2.8 min)</text>
+
+  <!-- Row 1: Root Cause -->
+  <rect x="30" y="100" width="200" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="40" y="120" class="row-label">Root Cause Analysis</text>
+  <rect x="235" y="100" width="220" height="30" class="tie-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="345" y="120" text-anchor="middle" class="cell-text">Correct  race condition</text>
+  <rect x="460" y="100" width="230" height="30" class="win-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="575" y="120" text-anchor="middle" class="cell-text">Detailed + precise explanation</text>
+
+  <!-- Row 2: Fix Strategy -->
+  <rect x="30" y="130" width="200" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="40" y="150" class="row-label">Fix Strategy</text>
+  <rect x="235" y="130" width="220" height="30" class="tie-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="345" y="150" text-anchor="middle" class="cell-text">image_num prefix (arg $1)</text>
+  <rect x="460" y="130" width="230" height="30" class="tie-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="575" y="150" text-anchor="middle" class="cell-text">image_num suffix (arg $4)</text>
+
+  <!-- Row 3: Scope -->
+  <rect x="30" y="160" width="200" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="40" y="180" class="row-label">Scope</text>
+  <rect x="235" y="160" width="220" height="30" class="tie-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="345" y="180" text-anchor="middle" class="cell-text">1 file, +19 / -18 lines</text>
+  <rect x="460" y="160" width="230" height="30" class="tie-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="575" y="180" text-anchor="middle" class="cell-text">1 file, +19 / -18 lines</text>
+
+  <!-- Row 4: Path Consistency -->
+  <rect x="30" y="190" width="200" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="40" y="210" class="row-label">Path Consistency</text>
+  <rect x="235" y="190" width="220" height="30" class="win-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="345" y="210" text-anchor="middle" class="cell-text">Perfect  all paths aligned</text>
+  <rect x="460" y="190" width="230" height="30" fill="#fef2f2" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="575" y="210" text-anchor="middle" class="cell-text">99%  :latest dropped in cleanup</text>
+
+  <!-- Row 5: PR Documentation -->
+  <rect x="30" y="220" width="200" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="40" y="240" class="row-label">PR Documentation</text>
+  <rect x="235" y="220" width="220" height="30" class="tie-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="345" y="240" text-anchor="middle" class="cell-text">Short commit message</text>
+  <rect x="460" y="220" width="230" height="30" class="win-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="575" y="240" text-anchor="middle" class="cell-text">Full root cause + test plan</text>
+
+  <!-- Row 6: Time -->
+  <rect x="30" y="250" width="200" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="40" y="270" class="row-label">Time to Fix</text>
+  <rect x="235" y="250" width="220" height="30" class="tie-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="345" y="270" text-anchor="middle" class="cell-text">~3 hours (PR to merge)</text>
+  <rect x="460" y="250" width="230" height="30" class="win-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="575" y="270" text-anchor="middle" class="cell-text">2.8 minutes (autonomous)</text>
+
+  <!-- Row 7: Review -->
+  <rect x="30" y="280" width="200" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="40" y="300" class="row-label">Review</text>
+  <rect x="235" y="280" width="220" height="30" class="win-bg" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="345" y="300" text-anchor="middle" class="cell-text">1 human reviewer </text>
+  <rect x="460" y="280" width="230" height="30" fill="#fef2f2" stroke="#e2e8f0" stroke-width="0.5"/>
+  <text x="575" y="300" text-anchor="middle" class="cell-text">Self-review (missed mismatch)</text>
+
+  <!-- Grade boxes -->
+  <rect x="235" y="325" width="220" height="60" rx="10" fill="#3b82f6" filter="url(#comp-shadow)"/>
+  <text x="295" y="363" class="grade-a" fill="#fff">A</text>
+  <text x="330" y="353" font-size="12" fill="#dbeafe" font-weight="600">Human Fix</text>
+  <text x="330" y="370" font-size="10" fill="#bfdbfe">Perfect precision</text>
+
+  <rect x="460" y="325" width="230" height="60" rx="10" fill="#8b5cf6" filter="url(#comp-shadow)"/>
+  <text x="520" y="363" class="grade-a" fill="#fff">A-</text>
+  <text x="560" y="353" font-size="12" fill="#ede9fe" font-weight="600">Ralph Loop</text>
+  <text x="560" y="370" font-size="10" fill="#ddd6fe">60x faster, better docs</text>
+</svg>

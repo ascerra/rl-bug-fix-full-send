@@ -2,36 +2,14 @@
 
 An agentic SDLC engine that uses iterative **Ralph Loops** to autonomously triage, implement, review, test, and report on bug fixes in GitHub-hosted repositories.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                     RALPH LOOP BUG FIX ENGINE                       │
-│                                                                     │
-│   GitHub Issue ──► TRIAGE ──► IMPLEMENT ──► REVIEW ──► VALIDATE    │
-│        │              │           │            │           │         │
-│        │         classify    write fix    independent   run tests   │
-│        │         severity    run tests     code review  create PR   │
-│        │         find files  run linters   zero-trust   monitor CI  │
-│        │                         │            │                     │
-│        │                         ◄────────────┘                     │
-│        │                    (request changes → retry)               │
-│        │                                                  │         │
-│        │                                              REPORT        │
-│        │                                           interactive      │
-│        │                                           HTML evidence    │
-│        ▼                                                            │
-│   ┌──────────┐  Artifacts: execution.json, report.html,            │
-│   │ ESCALATE │  summary.md, progress.md, decision tree,            │
-│   │ to human │  action map, transcript                              │
-│   └──────────┘                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+<!-- Overview diagram rendered inline as SVG below -->
 
 ## What Does It Do?
 
 Given a GitHub issue describing a bug, the engine:
 
 1. **Triages** it — classifies severity, identifies affected files, attempts reproduction
-2. **Implements** a fix — reads code, identifies root cause, writes a minimal patch, runs tests and linters
+2. **Implements** a fix — reads code, identifies root cause, writes a minimal patch, runs linters
 3. **Self-reviews** the fix — independent zero-trust review for correctness, intent alignment, security, and scope
 4. **Validates** and opens a PR — verifies minimal diff, generates a detailed PR description, pushes to the target repo
 5. **Reports** — produces interactive HTML evidence (decision trees, action maps, execution traces)
@@ -39,6 +17,10 @@ Given a GitHub issue describing a bug, the engine:
 If the engine gets stuck, it **escalates to a human** with full context of everything it tried.
 
 The engine runs entirely in **GitHub Actions** — no local setup required for production use.
+
+<p align="center">
+  <img src="docs/images/phase-pipeline.svg" alt="Phase Pipeline" width="900"/>
+</p>
 
 ## Production Results
 
@@ -48,28 +30,13 @@ The engine has been validated against real [Konflux](https://github.com/konflux-
 
 **Bug**: The `fbc-fips-check-oci-ta` Tekton task failed inconsistently during parallel image processing — temp file paths collided when images shared identical `component-version-release` labels.
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│               HUMAN FIX vs RALPH LOOP FIX                           │
-│                                                                     │
-│  Metric              Human (PR #3057)     Ralph Loop                │
-│  ─────────────────── ─────────────────    ────────────────          │
-│  Root cause          ✓ Race condition     ✓ Race condition          │
-│  Fix strategy        image_num prefix     image_num suffix          │
-│  Files changed       1                    1                         │
-│  Lines changed       +19 / -18           +19 / -18                 │
-│  Path consistency    Perfect              99% (1 tag mismatch)      │
-│  PR documentation    Short commit msg     Full root cause + plan    │
-│  Time to fix         ~3 hours             2.8 minutes               │
-│  Review              1 human reviewer     Autonomous self-review    │
-│                                                                     │
-│  Grade               A                    A-                        │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
 Both fixes identified the same root cause and used the same strategy (make temp paths unique per parallel job). The Ralph Loop matched the human's solution in **2.8 minutes** with better documentation. The human fix scored higher on precision — every path was perfectly consistent, while the Ralph Loop dropped a `:latest` suffix in one cleanup path.
 
 This analysis led directly to improvements: a **deterministic path-consistency checker** now catches these mismatches automatically (see [Continuous Improvement](#continuous-improvement)).
+
+<p align="center">
+  <img src="docs/images/konflux-comparison.svg" alt="KONFLUX-11443 Comparison" width="720"/>
+</p>
 
 ## What is a Ralph Loop?
 
@@ -77,44 +44,11 @@ A Ralph Loop is our adaptation of the [Ralph Wiggum Loop](https://ghuntley.com/r
 
 > Run an AI agent in a loop. Feed failures back as context. Iterate until an objective success criterion is met. **Iteration beats perfection; failures are data.**
 
-Our production loop adds structure with a phased OODA execution model:
+Our production loop adds structure with a phased OODA execution model. Each phase (triage, implement, review, validate, report) runs this full cycle independently. Phases validate each other with **zero trust** — the review phase re-reads the issue and diff from scratch rather than trusting the implementation phase's summary.
 
-```
-                    ┌──────────────────────────┐
-                    │      RALPH LOOP          │
-                    │                          │
-                    │   ┌──────────────────┐   │
-              ┌────►│   │    OBSERVE       │   │
-              │     │   │  gather context  │   │
-              │     │   └────────┬─────────┘   │
-              │     │            ▼              │
-              │     │   ┌──────────────────┐   │
-              │     │   │      PLAN        │   │
-              │     │   │   LLM analysis   │   │
-              │     │   └────────┬─────────┘   │
-              │     │            ▼              │
-              │     │   ┌──────────────────┐   │
-              │     │   │       ACT        │   │
-              │     │   │  execute tools   │   │
-              │     │   └────────┬─────────┘   │
-              │     │            ▼              │
-              │     │   ┌──────────────────┐   │
-              │     │   │    VALIDATE      │   │
-              │     │   │  check results   │   │
-              │     │   └────────┬─────────┘   │
-              │     │            ▼              │
-              │     │   ┌──────────────────┐   │
-              │     │   │    REFLECT       │   │──── Done? ──► EXIT
-              │     │   │ iterate/escalate │   │
-              │     │   └────────┬─────────┘   │
-              │     │            │              │
-              │     └────────────┼──────────────┘
-              │                  │
-              └──────────────────┘
-                   next phase
-```
-
-Each phase (triage, implement, review, validate, report) runs this full OODA cycle independently. Phases validate each other with **zero trust** — the review phase re-reads the issue and diff from scratch rather than trusting the implementation phase's summary.
+<p align="center">
+  <img src="docs/images/ooda-loop.svg" alt="OODA Loop Cycle" width="480"/>
+</p>
 
 ### Two Levels of Loop
 
@@ -127,47 +61,9 @@ The meta loop built the production system over 51 iterations (see [progress/run-
 
 ## Architecture
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│                    GITHUB ACTIONS WORKFLOW                         │
-│  .github/workflows/ralph-loop.yml                                 │
-│                                                                   │
-│  ┌────────────┐   ┌──────────────┐   ┌──────────────────────┐   │
-│  │  Checkout   │──►│ Setup Python │──►│   Run Engine CLI     │   │
-│  │  + Clone    │   │  + uv        │   │   python -m engine   │   │
-│  └────────────┘   └──────────────┘   └──────────┬───────────┘   │
-│                                                  │                │
-│  ┌───────────────────────────────────────────────▼──────────┐    │
-│  │                    ENGINE (Python)                         │    │
-│  │                                                           │    │
-│  │  ┌─────────┐  ┌────────────────────────────────────────┐ │    │
-│  │  │  loop   │  │              PHASES                     │ │    │
-│  │  │  .py    │─►│  triage → implement → review → validate│ │    │
-│  │  │         │  │                  ▲         │            │ │    │
-│  │  │  OODA   │  │                  └─────────┘            │ │    │
-│  │  │  cycle  │  │              (reject → retry)           │ │    │
-│  │  └─────────┘  └────────────────────────────────────────┘ │    │
-│  │                                                           │    │
-│  │  ┌────────────┐  ┌──────────────┐  ┌──────────────────┐ │    │
-│  │  │   tools/   │  │integrations/ │  │ observability/   │ │    │
-│  │  │  executor  │  │ llm, github  │  │ logger, tracer   │ │    │
-│  │  │  7 tools   │  │ slack, jira  │  │ metrics          │ │    │
-│  │  └────────────┘  └──────────────┘  └──────────────────┘ │    │
-│  │                                                           │    │
-│  │  ┌────────────────────────────────────────────────────┐  │    │
-│  │  │             visualization/                          │  │    │
-│  │  │  report.html  decision_tree  action_map  comparison│  │    │
-│  │  └────────────────────────────────────────────────────┘  │    │
-│  └───────────────────────────────────────────────────────────┘    │
-│                                                                   │
-│  ┌──────────────────────────────────────────────────────────┐    │
-│  │              ARTIFACTS (uploaded)                          │    │
-│  │  execution.json  log.json  progress.md  status.txt       │    │
-│  │  reports/report.html  reports/summary.md                  │    │
-│  │  transcripts/transcript.html  transcripts/calls.json     │    │
-│  └──────────────────────────────────────────────────────────┘    │
-└──────────────────────────────────────────────────────────────────┘
-```
+<p align="center">
+  <img src="docs/images/architecture.svg" alt="Engine Architecture" width="780"/>
+</p>
 
 ### Engine Components
 
@@ -206,49 +102,66 @@ Each phase uses **phase-specific prompts** (in `templates/prompts/`) and **phase
 
 ### Security Model
 
-```
-┌──────────────────────────────────────────────────────┐
-│                  ZERO TRUST DESIGN                    │
-│                                                       │
-│  Issue body ─── UNTRUSTED ──► wrapped in delimiters  │
-│  Code diff  ─── UNTRUSTED ──► wrapped in delimiters  │
-│  Slack msgs ─── UNTRUSTED ──► wrapped in delimiters  │
-│  Jira data  ─── UNTRUSTED ──► wrapped in delimiters  │
-│                                                       │
-│  System prompts ─── TRUSTED (never contain user data) │
-│  Config         ─── TRUSTED (from repo, not user)     │
-│  Tool results   ─── VERIFIED (by each phase)          │
-│                                                       │
-│  Phase N does NOT trust Phase N-1's summary.          │
-│  Each phase re-reads source material independently.   │
-└──────────────────────────────────────────────────────┘
-```
+The engine treats all external data as **untrusted** and wraps it in delimiters before passing to the LLM:
+
+| Source | Trust Level | Handling |
+|--------|-------------|----------|
+| Issue body | UNTRUSTED | Wrapped in delimiters, never in system prompts |
+| Code diff | UNTRUSTED | Wrapped in delimiters, reviewed independently |
+| Slack messages | UNTRUSTED | Wrapped by integration adapter |
+| Jira data | UNTRUSTED | Wrapped by integration adapter |
+| System prompts | TRUSTED | Never contain user-supplied data |
+| Config | TRUSTED | From repo, not from user input |
+| Prior phase output | VERIFIED | Each phase re-reads source material independently |
 
 - **127 prompt injection tests** verify that untrusted content never leaks into system prompts
 - **59 security audit tests** verify commit signing, provenance recording, secret redaction
 - All secrets redacted from logs, traces, artifacts, and LLM transcripts
 
+### Testing Strategy: CI-First (Tests Are Disabled)
+
+**Test execution is disabled by default.** This is a deliberate architectural decision, not a missing feature.
+
+The engine targets arbitrary GitHub repositories. Running their test suites inside the GitHub Actions runner is unreliable and risky because:
+
+- The correct language runtime/version may not be installed
+- Dependencies may require Docker, databases, kind clusters, or specialized infrastructure the runner lacks
+- Test suites may exceed timeouts (real suites can run 20+ minutes)
+- Pre-existing flaky tests waste the iteration budget chasing unrelated failures
+- Executing arbitrary shell commands from untrusted repos is a security surface
+
+**Instead, the engine relies on the target repo's own CI pipeline** — which has the correct build matrix, services, secrets, and infrastructure — to validate the fix after the PR is created.
+
+| Mode | Behavior | When Used |
+|------|----------|-----------|
+| `disabled` (default) | Tests skipped entirely; linting still runs | All repos unless configured otherwise |
+| `opportunistic` | Tests run but failures don't block the loop | Auto-promoted when `test_command` is configured in `.rl-config.yaml` |
+| `required` | Tests must pass before PR is created | Explicitly set in `.rl-config.yaml` |
+
+Configure via `.rl-config.yaml` in the target repo:
+
+```yaml
+phases:
+  implement:
+    test_command: "go test ./..."
+    test_execution_mode: "opportunistic"  # or "required"
+  validate:
+    test_command: "go test ./..."
+    test_execution_mode: "opportunistic"
+```
+
+**Linting is always enabled** — it's cheap, fast, and works across repos without special infrastructure.
+
 ## Continuous Improvement
 
 The engine improves itself through multiple feedback mechanisms:
 
-```
-Production Run                Analysis                    Improvement
-─────────────          ──────────────────          ─────────────────────
-execution.json ──────► deterministic checks ─────► prompt updates
-                       (path consistency,          (review.md, implement.md)
-                        paired operations)
-                                                   code safety nets
-                       LLM pattern detection ────► (review.py consistency
-                       (extraction.py)              checker)
-
-                       golden principles ─────────► AST-based enforcement
-                       (7 structural properties)    (golden_principles.py)
-
-                       quality scanner ───────────► weekly scan + auto PR
-                       (quality_scanner.py)         (.github/workflows/
-                                                     quality-scan.yml)
-```
+| Feedback Source | Analysis | Improvement |
+|----------------|----------|-------------|
+| `execution.json` from production runs | Deterministic checks (path consistency, paired operations) | Prompt updates (`review.md`, `implement.md`) + code safety nets (`review.py`) |
+| Repeated LLM call patterns | Pattern detection (`extraction.py`) | Deterministic tool proposals replacing expensive LLM calls |
+| Engine source code | Golden principles (7 structural properties) | AST-based enforcement via `golden_principles.py` |
+| Code metrics + scan results | Background quality scanner | Weekly cron scan + auto-generated refactoring PRs |
 
 **Recent improvement (Run 51)**: After comparing the engine's fix for KONFLUX-11443 against the human fix, we identified that the self-review phase missed a subtle OCI tag mismatch (`:latest` dropped from a cleanup path). Three changes were made:
 
@@ -404,31 +317,27 @@ rl-bug-fix-full-send/
 
 Every run produces full traceability regardless of success or failure:
 
+**Real-time** (visible in GitHub Actions log):
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    TRACEABILITY OUTPUTS                          │
-│                                                                  │
-│  REAL-TIME (GitHub Actions log)                                  │
-│  ├── >>> [TRIAGE] Classified as bug (confidence: 0.85)          │
-│  ├── >>> [IMPLEMENT] Fix strategy: make paths unique. 1 file.   │
-│  ├── >>> [REVIEW] Verdict: approve. 1 nit finding.              │
-│  └── >>> [VALIDATE] PR created. CI status: pending.             │
-│                                                                  │
-│  ARTIFACTS (downloadable)                                        │
-│  ├── execution.json ─── complete machine-readable execution log │
-│  ├── progress.md    ─── running human-readable narrative        │
-│  ├── summary.md     ─── iteration trace (→ GH step summary)    │
-│  ├── report.html    ─── interactive D3.js visualizations        │
-│  ├── log.json       ─── structured JSON logs                    │
-│  ├── transcript.html─── LLM call transcripts                    │
-│  └── status.txt     ─── final status (success/escalated/error)  │
-│                                                                  │
-│  ON CRASH                                                        │
-│  ├── Which OODA step failed (observe/plan/act/validate/reflect) │
-│  ├── Partial context gathered before the crash                   │
-│  └── Full Python traceback                                       │
-└─────────────────────────────────────────────────────────────────┘
+>>> [TRIAGE] Classified as bug (confidence: 0.85, severity: high).
+>>> [IMPLEMENT] Fix strategy: make paths unique. 1 file change(s) proposed.
+>>> [REVIEW] Verdict: approve. 1 nit finding. Confidence: 1.00.
+>>> [VALIDATE] PR created. CI status: pending.
 ```
+
+**Artifacts** (downloadable from the workflow run):
+
+| File | Contents |
+|------|----------|
+| `execution.json` | Complete machine-readable execution log with all phases, findings, artifacts, LLM calls |
+| `progress.md` | Running human-readable narrative, continuously appended during execution |
+| `summary.md` | Iteration trace with per-phase pass/fail, duration, findings (piped to `$GITHUB_STEP_SUMMARY`) |
+| `report.html` | Interactive D3.js visualizations — decision tree, action map, narrative |
+| `log.json` | Structured JSON logs with correlation IDs |
+| `transcript.html` | Full LLM call transcripts (prompts, responses, token counts) |
+| `status.txt` | Final status: `success`, `escalated`, or `error` |
+
+**On crash**: the execution record captures which OODA step failed, what partial context was gathered, and the full Python traceback.
 
 ## Development History
 
