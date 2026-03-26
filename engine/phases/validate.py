@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import secrets
 from typing import Any, ClassVar
 
 from engine.phases.base import Phase, PhaseResult
@@ -223,13 +225,19 @@ class ValidatePhase(Phase):
         ci_status: dict[str, Any] = {}
 
         if can_create_pr and self.tool_executor:
-            pr_result = await self._create_pr(validate_result, observation, actions)
+            issue_url = self.issue_data.get("url", "")
+            issue_number_match = re.search(r"/issues/(\d+)", issue_url)
+            issue_number = issue_number_match.group(1) if issue_number_match else "unknown"
+            random_suffix = secrets.token_hex(4)
+            branch_name = f"rl/fix-{issue_number}-{random_suffix}"
+
+            pr_result = await self._create_pr(validate_result, observation, actions, branch_name)
             pr_created = pr_result.get("created", False)
             pr_url = pr_result.get("url", "")
             pr_error = pr_result.get("error", "")
 
             if pr_created:
-                ci_status = await self._check_post_pr_ci(observation, actions)
+                ci_status = await self._check_post_pr_ci(observation, actions, branch_name)
 
         if pr_created:
             self.logger.narrate(f"PR created: {pr_url}")
@@ -467,6 +475,7 @@ class ValidatePhase(Phase):
         self,
         observation: dict[str, Any],
         actions: list[dict[str, Any]],
+        branch_name: str,
     ) -> dict[str, Any]:
         """Poll the PR's initial CI status after creation (informational).
 
@@ -484,7 +493,7 @@ class ValidatePhase(Phase):
         result = await self.tool_executor.execute(
             "github_api",
             method="GET",
-            endpoint=f"/repos/{repo_endpoint}/commits/rl/fix/status",
+            endpoint=f"/repos/{repo_endpoint}/commits/{branch_name}/status",
         )
 
         ci_state = "unknown"
@@ -517,6 +526,7 @@ class ValidatePhase(Phase):
         validate_result: dict[str, Any],
         observation: dict[str, Any],
         actions: list[dict[str, Any]],
+        branch_name: str,
     ) -> dict[str, Any]:
         """Create a branch, push it, and open a PR via the GitHub API.
 
@@ -530,7 +540,6 @@ class ValidatePhase(Phase):
 
         issue_url = self.issue_data.get("url", "")
         pr_description = validate_result.get("pr_description", "Automated bug fix")
-        branch_name = "rl/fix"
 
         repo_endpoint = self._extract_repo_endpoint(issue_url)
         if not repo_endpoint:
