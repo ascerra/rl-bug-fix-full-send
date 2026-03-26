@@ -219,20 +219,24 @@ class ValidatePhase(Phase):
 
         pr_created = False
         pr_url = ""
+        pr_error = ""
         ci_status: dict[str, Any] = {}
 
         if can_create_pr and self.tool_executor:
             pr_result = await self._create_pr(validate_result, observation, actions)
             pr_created = pr_result.get("created", False)
             pr_url = pr_result.get("url", "")
+            pr_error = pr_result.get("error", "")
 
             if pr_created:
                 ci_status = await self._check_post_pr_ci(observation, actions)
 
         if pr_created:
             self.logger.narrate(f"PR created: {pr_url}")
-        elif can_create_pr:
+        elif can_create_pr and not self.tool_executor:
             self.logger.narrate("PR creation skipped (no tool executor).")
+        elif can_create_pr:
+            self.logger.narrate(f"PR creation failed: {pr_error or 'unknown error'}.")
         else:
             blocking = []
             if not tests_ok and tests_gate:

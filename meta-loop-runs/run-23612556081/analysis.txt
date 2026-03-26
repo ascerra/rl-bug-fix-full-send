@@ -1,7 +1,0 @@
-Run ID: 23612556081
-Status: escalated
-Iterations: 7
-Review count: 3
-Review rejections: 3
-Timestamp: 2026-03-26T15:08:49-04:00
-Issue URL: https://github.com/nonflux/build-definitions/issues/1

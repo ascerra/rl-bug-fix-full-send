@@ -10,3 +10,4 @@ output/
 .ruff_cache/
 .venv/
 progress/index.html
+meta-loop-runs/
