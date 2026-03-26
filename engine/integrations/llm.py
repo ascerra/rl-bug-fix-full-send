@@ -143,32 +143,31 @@ class GeminiProvider:
             pass
 
         if not text:
+            import sys
             candidates = getattr(response, "candidates", None)
             if candidates:
                 candidate = candidates[0]
                 finish_reason = getattr(candidate, "finish_reason", "UNKNOWN")
-                parts = getattr(getattr(candidate, "content", None), "parts", [])
+                content_obj = getattr(candidate, "content", None)
+                parts = getattr(content_obj, "parts", None) or []
                 part_texts = []
                 for part in parts:
                     t = getattr(part, "text", None)
                     if t:
                         part_texts.append(t)
                 if part_texts:
-                    text = "\n".join(part_texts)
+                    text = chr(10).join(part_texts)
                 else:
-                    import sys
                     print(
                         f">>> [GEMINI-DIAG] Empty response. "
                         f"finish_reason={finish_reason}, "
                         f"parts_count={len(parts)}, "
-                        f"candidate_fields={[a for a in dir(candidate) if not a.startswith('_')]}",
+                        f"content_obj={type(content_obj).__name__}",
                         file=sys.stderr,
                     )
             else:
-                import sys
                 print(
-                    f">>> [GEMINI-DIAG] No candidates in response. "
-                    f"response_fields={[a for a in dir(response) if not a.startswith('_')]}",
+                    f">>> [GEMINI-DIAG] No candidates in response.",
                     file=sys.stderr,
                 )
 
