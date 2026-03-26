@@ -1,0 +1,20 @@
+{
+  "diagnosis": "The run failed by hitting the maximum iteration limit after being stuck in a loop between the `implement` and `review` phases. The `review` phase correctly rejected the proposed fix four times for 'scope creep', as the `implement` phase was generating a massive, unrelated refactoring of a large YAML configuration file instead of a minimal bug fix. The `implement` phase failed to correct its behavior based on the review feedback because it was only being shown a small, truncated prefix of the large file and was forced to hallucinate the remainder, resulting in the refactoring.",
+  "root_cause": "Aggressive file content truncation in implement and review phases",
+  "changes": [
+    {
+      "file": "engine/phases/implement.py",
+      "search": "            truncated = content[:5000] if len(content) > 5000 else content",
+      "replace": "            truncated = content[:50000] if len(content) > 50000 else content",
+      "reason": "The previous limit of 5000 characters was too small for large configuration files like the one in the failed run (11k+ chars). This forced the LLM to hallucinate the truncated part of the file when asked to generate the complete content, leading to massive unintended refactoring. Increasing the limit to 50,000 characters ensures the full file content is provided as context, enabling the LLM to make the requested minimal change."
+    },
+    {
+      "file": "engine/phases/review.py",
+      "search": "            truncated = content[:5000] if len(content) > 5000 else content",
+      "replace": "            truncated = content[:50000] if len(content) > 50000 else content",
+      "reason": "For consistency and to provide the review LLM with better context on large files. While less critical than in the implement phase, having the full file content can prevent incorrect review findings that might arise from only seeing a partial file. This change mirrors the one in the implement phase."
+    }
+  ],
+  "summary": "Increased the file content truncation limit in the implement and review phases from 5,000 to 50,000 characters.",
+  "confidence": "high"
+}
