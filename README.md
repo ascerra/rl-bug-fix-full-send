@@ -18,7 +18,7 @@ If the engine gets stuck, it **escalates to a human** with full context of every
 
 The engine runs entirely in **GitHub Actions** — no local setup required for production use.
 
-![Phase Pipeline](https://raw.githubusercontent.com/ascerra/rl-bug-fix-full-send/main/docs/images/phase-pipeline.svg)
+![Phase Pipeline](docs/images/phase-pipeline.png)
 
 ## Production Results
 
@@ -32,7 +32,7 @@ Both fixes identified the same root cause and used the same strategy (make temp 
 
 This analysis led directly to improvements: a **deterministic path-consistency checker** now catches these mismatches automatically (see [Continuous Improvement](#continuous-improvement)).
 
-![KONFLUX-11443 Comparison](https://raw.githubusercontent.com/ascerra/rl-bug-fix-full-send/main/docs/images/konflux-comparison.svg)
+![KONFLUX-11443 Comparison](docs/images/konflux-comparison.png)
 
 ## What is a Ralph Loop?
 
@@ -42,7 +42,7 @@ A Ralph Loop is our adaptation of the [Ralph Wiggum Loop](https://ghuntley.com/r
 
 Our production loop adds structure with a phased OODA execution model. Each phase (triage, implement, review, validate, report) runs this full cycle independently. Phases validate each other with **zero trust** — the review phase re-reads the issue and diff from scratch rather than trusting the implementation phase's summary.
 
-![OODA Loop Cycle](https://raw.githubusercontent.com/ascerra/rl-bug-fix-full-send/main/docs/images/ooda-loop.svg)
+![OODA Loop Cycle](docs/images/ooda-loop.png)
 
 ### Two Levels of Loop
 
@@ -55,7 +55,7 @@ The meta loop built the production system over 51 iterations (see [progress/run-
 
 ## Architecture
 
-![Engine Architecture](https://raw.githubusercontent.com/ascerra/rl-bug-fix-full-send/main/docs/images/architecture.svg)
+![Engine Architecture](docs/images/architecture.png)
 
 ### Engine Components
 
