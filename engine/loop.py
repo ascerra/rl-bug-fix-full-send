@@ -200,6 +200,9 @@ class RalphLoop:
             )
             self.logger.narrate(f"Starting {phase_name} phase (iteration {self._total_iterations})")
 
+            if phase_name == "report":
+                self._populate_execution_record_for_snapshot(status, phase_results)
+
             iteration_started = datetime.now(UTC).isoformat()
             phase_start = time.monotonic()
 
@@ -367,6 +370,7 @@ class RalphLoop:
             if phase_name == "report":
                 issue_data["_execution_snapshot"] = self.execution.to_dict()
                 issue_data["_output_dir"] = str(self.output_dir)
+                issue_data["_transcript_calls"] = self.transcript.get_calls()
 
             phase = phase_cls(
                 llm=self.llm,
@@ -410,6 +414,27 @@ class RalphLoop:
             return PHASE_ORDER.index(phase_name)
         except ValueError:
             return None
+
+    def _populate_execution_record_for_snapshot(
+        self,
+        status: str,
+        phase_results: list[PhaseResult],
+    ) -> None:
+        """Write current metrics, actions, and result into the execution record.
+
+        Called before the report phase snapshot so the generated HTML report
+        has access to the real execution data instead of empty defaults.
+        """
+        self.execution.result = {
+            "status": status,
+            "total_iterations": self._total_iterations,
+            "phase_results": [
+                {"phase": r.phase, "success": r.success, "escalate": r.escalate}
+                for r in phase_results
+            ],
+        }
+        self.execution.metrics = self.metrics.to_dict()
+        self.execution.actions = self.tracer.get_actions_as_dicts()
 
     def _record_escalation(self, reason: str, phase_results: list[PhaseResult]) -> None:
         """Record escalation context for human review."""
@@ -482,18 +507,13 @@ class RalphLoop:
             json.dump(calls, f, indent=2)
 
     def _publish_reports(self) -> None:
-        """Generate visual reports from the execution record.
+        """Generate visual reports from the finalized execution record.
 
-        Skipped when the ReportPhase already published successfully (avoids
-        double generation).  Otherwise runs the ReportPublisher as a fallback.
+        Always regenerates reports even if the ReportPhase already published,
+        because the post-loop execution record contains complete metrics,
+        actions, and final status that were unavailable during the report phase.
         Failures are logged but never block loop completion.
         """
-        for it in self.execution.iterations:
-            if it.get("phase") == "report" and it.get("result", {}).get("success"):
-                artifacts = it.get("artifacts", {})
-                if artifacts.get("files_generated"):
-                    self.logger.debug("Reports already published by report phase — skipping")
-                    return
         try:
             from engine.visualization.publisher import ReportPublisher
 

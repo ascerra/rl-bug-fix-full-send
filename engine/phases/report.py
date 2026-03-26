@@ -80,6 +80,7 @@ class ReportPhase(Phase):
             }
 
         snapshot = self.issue_data["_execution_snapshot"]
+        transcript_calls = self.issue_data.get("_transcript_calls")
         output_dir = plan.get("output_dir", "")
         if not output_dir:
             self.logger.narrate("No output directory configured — skipping report generation.")
@@ -98,7 +99,7 @@ class ReportPhase(Phase):
                 output_dir=reports_dir,
                 config=self.config.reporting,
             )
-            result = publisher.publish(snapshot)
+            result = publisher.publish(snapshot, transcript_calls=transcript_calls)
         except ImportError:
             self.logger.narrate("Visualization module not available — skipping.")
             return {
