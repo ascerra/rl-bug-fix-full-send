@@ -84,22 +84,31 @@ class ImplementPhase(Phase):
                     "-o -name '*.yaml' -o -name '*.yml' -o -name '*.rs' "
                     "-o -name 'go.mod' -o -name 'Cargo.toml' -o -name 'package.json' "
                     "-o -name 'pyproject.toml' -o -name 'Makefile' \\) "
-                    "| grep -v node_modules | grep -v __pycache__ | sort | head -100"
+                    "| grep -v node_modules | grep -v __pycache__ | sort | head -200"
                 ),
             )
             if tree.get("success"):
                 repo_structure = tree["stdout"]
 
-        self._detected_stack = detect_repo_stack(
-            repo_structure,
-            test_command_override=self.config.phases.implement.test_command,
-            lint_command_override=self.config.phases.implement.lint_command,
-        )
-        self.logger.info(
-            f"Detected repo stack: {self._detected_stack.language} "
-            f"(from {self._detected_stack.detected_from}, "
-            f"confidence={self._detected_stack.confidence:.2f})"
-        )
+        triage_stack = self._extract_triage_stack()
+        if triage_stack is not None:
+            self._detected_stack = triage_stack
+            self.logger.info(
+                f"Inherited repo stack from triage: {self._detected_stack.language} "
+                f"(from {self._detected_stack.detected_from}, "
+                f"confidence={self._detected_stack.confidence:.2f})"
+            )
+        else:
+            self._detected_stack = detect_repo_stack(
+                repo_structure,
+                test_command_override=self.config.phases.implement.test_command,
+                lint_command_override=self.config.phases.implement.lint_command,
+            )
+            self.logger.info(
+                f"Detected repo stack (independent): {self._detected_stack.language} "
+                f"(from {self._detected_stack.detected_from}, "
+                f"confidence={self._detected_stack.confidence:.2f})"
+            )
 
         n_files = len(file_contents)
         retry_count_val = retry_count
@@ -203,19 +212,22 @@ class ImplementPhase(Phase):
 
         impl_plan = plan.get("impl_plan", {})
         max_inner = self.config.phases.implement.max_inner_iterations
-        run_tests = self.config.phases.implement.run_tests_after_each_edit
+        test_exec_mode = self.config.phases.implement.test_execution_mode
         run_linters = self.config.phases.implement.run_linters
         actions: list[dict[str, Any]] = []
+
+        should_run_tests = test_exec_mode in ("opportunistic", "required")
+        tests_gate = test_exec_mode == "required"
 
         files_written = await self._apply_fix(impl_plan, actions)
 
         test_result: dict[str, Any] = {"passed": False, "output": ""}
         lint_result: dict[str, Any] = {"passed": False, "output": ""}
 
-        if run_tests:
+        if should_run_tests:
             test_result = await self._run_tests(actions)
         else:
-            test_result = {"passed": True, "output": "Tests skipped by config"}
+            test_result = {"passed": True, "output": "Tests skipped (disabled mode)"}
 
         if run_linters:
             lint_result = await self._run_linters(actions)
@@ -223,8 +235,11 @@ class ImplementPhase(Phase):
             lint_result = {"passed": True, "output": "Linters skipped by config"}
 
         inner_iterations = 0
-        both_pass = test_result["passed"] and lint_result["passed"]
-        while inner_iterations < max_inner and not both_pass:
+        if tests_gate:
+            all_pass = test_result["passed"] and lint_result["passed"]
+        else:
+            all_pass = lint_result["passed"]
+        while inner_iterations < max_inner and not all_pass:
             inner_iterations += 1
             self.logger.info(
                 f"Inner iteration {inner_iterations}/{max_inner}: "
@@ -237,11 +252,14 @@ class ImplementPhase(Phase):
             )
             files_written = await self._apply_fix(refinement, actions)
 
-            if run_tests:
+            if should_run_tests:
                 test_result = await self._run_tests(actions)
             if run_linters:
                 lint_result = await self._run_linters(actions)
-            both_pass = test_result["passed"] and lint_result["passed"]
+            if tests_gate:
+                all_pass = test_result["passed"] and lint_result["passed"]
+            else:
+                all_pass = lint_result["passed"]
 
         diff_output = ""
         if self.tool_executor:
@@ -435,6 +453,30 @@ class ImplementPhase(Phase):
                 best_content = llm_response.content
 
         return best_plan, best_content
+
+    def _extract_triage_stack(self) -> RepoStack | None:
+        """Inherit the detected repo stack from the triage phase.
+
+        Triage serializes its ``RepoStack`` into ``PhaseResult.artifacts["detected_stack"]``.
+        Using the triage stack prevents re-detection errors caused by truncated file
+        listings (D17).  Config overrides for test/lint commands are applied on top.
+        """
+        for result in reversed(self.prior_results):
+            if result.phase != "triage" or not result.success:
+                continue
+            stack_dict = result.artifacts.get("detected_stack")
+            if not isinstance(stack_dict, dict) or "language" not in stack_dict:
+                continue
+            test_override = self.config.phases.implement.test_command
+            lint_override = self.config.phases.implement.lint_command
+            return RepoStack(
+                language=stack_dict["language"],
+                test_command=test_override or stack_dict.get("test_command", ""),
+                lint_command=lint_override or stack_dict.get("lint_command", ""),
+                detected_from=f"triage_handoff+{stack_dict.get('detected_from', 'unknown')}",
+                confidence=float(stack_dict.get("confidence", 0.0)),
+            )
+        return None
 
     def _extract_triage_report(self) -> dict[str, Any]:
         """Extract the triage report from prior phase results (if available)."""

@@ -193,39 +193,350 @@ function renderDecisionTree(data, containerId, detailPanelId) {
   function showDetail(d) {
     if (!detailPanel) return;
     var data = d.data;
-    var html = '<h3>' + escapeHtml(data.label) + '</h3>';
-    html += '<p><strong>Type:</strong> ' + escapeHtml(data.type)
-      + ' &nbsp;|&nbsp; <strong>Status:</strong> '
-      + '<span style="color:' + (STATUS_COLORS[data.status] || '#8b949e') + '">'
-      + escapeHtml(data.status) + '</span></p>';
+    var meta = data.meta || {};
+    var html = '';
 
-    if (data.meta && Object.keys(data.meta).length > 0) {
-      var filtered = filterMeta(data.meta);
-      html += '<pre>' + escapeHtml(JSON.stringify(filtered, null, 2)) + '</pre>';
+    html += '<h3>' + escapeHtml(data.label) + '</h3>';
+
+    /* Status bar with badges */
+    var statusColor = STATUS_COLORS[data.status] || '#8b949e';
+    var statusClass = 'status-' + data.status;
+    html += '<div class="detail-status-bar">';
+    html += '<span class="badge ' + statusClass + '">' + escapeHtml(data.status) + '</span>';
+    html += '<span class="badge action-type-' + escapeHtml(data.type) + '" style="background:rgba(139,148,158,0.12);color:' + statusColor + '">' + escapeHtml(data.type) + '</span>';
+    if (meta.duration_ms) {
+      html += '<span class="detail-duration">' + formatDuration(meta.duration_ms) + '</span>';
+    }
+    html += '</div>';
+
+    /* Render type-specific human-readable content */
+    if (data.type === 'action') {
+      html += renderActionDetail(meta);
+    } else if (data.type === 'phase') {
+      html += renderPhaseDetail(meta);
+    } else if (data.type === 'root') {
+      html += renderRootDetail(meta);
+    } else if (data.type === 'outcome') {
+      html += renderOutcomeDetail(meta, data.status);
+    } else {
+      html += renderGenericDetail(meta);
     }
 
-    if (!data.meta || Object.keys(data.meta).length === 0) {
-      html += '<p style="color:#8b949e;font-style:italic;">No additional metadata for this node.</p>';
+    /* Extra structured details for actions */
+    if (data.type === 'action' && meta) {
+      html += renderExtraFields(meta);
     }
 
     detailPanel.innerHTML = html;
     detailPanel.style.display = 'block';
   }
 
-  function filterMeta(meta) {
-    var out = {};
+  function renderActionDetail(meta) {
+    var html = '<div class="detail-narrative">';
+    var actionType = meta.action_type || 'unknown';
+    var desc = meta.description || 'No description';
+    var input = meta.input || {};
+    var output = meta.output || {};
+
+    if (actionType === 'llm_query') {
+      html += '<p>The agent asked the AI model to <strong>' + escapeHtml(desc.toLowerCase()) + '</strong>.</p>';
+      if (meta.provenance) {
+        var prov = meta.provenance;
+        if (prov.model) {
+          html += '<p>Model: <strong>' + escapeHtml(prov.model) + '</strong>';
+          if (prov.provider) html += ' via ' + escapeHtml(prov.provider);
+          html += '</p>';
+        }
+      }
+      var ctx = meta.llm_context || {};
+      if (ctx.tokens_in || ctx.tokens_out) {
+        html += '<p>' + (ctx.tokens_in || 0) + ' tokens in, ' + (ctx.tokens_out || 0) + ' tokens out</p>';
+      }
+      if (output.success === false && output.error) {
+        html += '<p style="color:var(--failure)">Failed: ' + escapeHtml(truncate(output.error, 200)) + '</p>';
+      }
+    } else if (actionType.indexOf('tool') >= 0 || actionType === 'tool_execution') {
+      var toolName = extractToolName(desc);
+      var filePath = input.path || input.context && input.context.path || '';
+      html += '<p>' + describeToolAction(toolName, desc, filePath) + '</p>';
+      if (filePath) {
+        html += '<p>File: <span class="detail-file-path">' + escapeHtml(filePath) + '</span></p>';
+      }
+      if (output.success) {
+        html += '<p style="color:var(--success)">Completed successfully</p>';
+      } else if (output.success === false) {
+        html += '<p style="color:var(--failure)">Failed';
+        if (output.error) html += ': ' + escapeHtml(truncate(output.error, 200));
+        html += '</p>';
+      }
+    } else if (actionType === 'escalation') {
+      html += '<p style="color:var(--failure)"><strong>The agent escalated this issue for human review.</strong></p>';
+      if (desc) html += '<p>' + escapeHtml(desc) + '</p>';
+    } else {
+      html += '<p>' + escapeHtml(desc) + '</p>';
+    }
+    html += '</div>';
+
+    /* Show readable output data if available */
+    var outputDisplay = extractReadableOutput(output);
+    if (outputDisplay) {
+      html += '<div class="detail-section">';
+      html += '<div class="detail-section-title">Result</div>';
+      html += '<div class="detail-code-block">' + escapeHtml(outputDisplay) + '</div>';
+      html += '</div>';
+    }
+
+    return html;
+  }
+
+  function renderPhaseDetail(meta) {
+    var html = '<div class="detail-narrative">';
+    var phase = meta.phase || 'unknown';
+    var iter = meta.iteration || 0;
+
+    var phaseDescriptions = {
+      'triage': 'The agent analyzed the issue to understand the bug, classify its severity, and identify which files are likely affected.',
+      'implement': 'The agent attempted to write a code fix based on the triage analysis and any prior review feedback.',
+      'review': 'The agent independently re-read the issue and reviewed the proposed changes for correctness, security, and scope.',
+      'validate': 'The agent ran tests and linters to verify the fix works correctly without breaking anything.',
+      'report': 'The agent generated visual reports and summaries of the execution.'
+    };
+
+    html += '<p>' + (phaseDescriptions[phase] || 'Phase: ' + escapeHtml(phase)) + '</p>';
+
+    if (meta.success) {
+      html += '<p style="color:var(--success)">This phase completed successfully.</p>';
+    } else if (meta.escalate) {
+      html += '<p style="color:var(--escalated)">This phase escalated the issue for human review.</p>';
+    } else if (meta.next_phase && meta.next_phase !== phase) {
+      html += '<p style="color:var(--warning)">Phase did not succeed — transitioning to <strong>' + escapeHtml(meta.next_phase) + '</strong>.</p>';
+    }
+    html += '</div>';
+
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Activity</div>';
+    html += '<div class="detail-kv-list">';
+    html += kvRow('Iteration', '#' + iter);
+    html += kvRow('Actions taken', meta.action_count || 0);
+    html += kvRow('LLM calls', meta.llm_call_count || 0);
+    html += kvRow('Tool calls', meta.tool_call_count || 0);
+    if (meta.duration_ms) html += kvRow('Duration', formatDuration(meta.duration_ms));
+    if (meta.started_at) html += kvRow('Started', meta.started_at.substring(0, 19));
+    html += '</div></div>';
+
+    return html;
+  }
+
+  function renderRootDetail(meta) {
+    var html = '<div class="detail-narrative">';
+    html += '<p>This is the top-level Ralph Loop execution.</p>';
+    if (meta.trigger && meta.trigger.source_url) {
+      html += '<p>Triggered by: <a href="' + escapeHtml(meta.trigger.source_url) + '" style="color:var(--accent)">' + escapeHtml(meta.trigger.source_url) + '</a></p>';
+    }
+    html += '</div>';
+
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Overview</div>';
+    html += '<div class="detail-kv-list">';
+    html += kvRow('Execution ID', (meta.execution_id || '').substring(0, 12));
+    html += kvRow('Total iterations', meta.total_iterations || 0);
+    html += kvRow('Total tokens', meta.total_tokens || 0);
+    if (meta.started_at) html += kvRow('Started', meta.started_at.substring(0, 19));
+    html += '</div></div>';
+
+    return html;
+  }
+
+  function renderOutcomeDetail(meta, status) {
+    var html = '<div class="detail-narrative">';
+    var outcomeMessages = {
+      'success': 'The agent successfully completed the bug fix. All phases passed and the fix was validated.',
+      'failure': 'The agent was unable to complete the bug fix after all available attempts.',
+      'escalated': 'The agent determined this issue needs human attention and escalated it.',
+      'timeout': 'The agent ran out of time before completing the fix.'
+    };
+    html += '<p>' + (outcomeMessages[status] || 'Final status: ' + escapeHtml(status)) + '</p>';
+    html += '</div>';
+
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Summary</div>';
+    html += '<div class="detail-kv-list">';
+    html += kvRow('Final status', status);
+    html += kvRow('Total iterations', meta.total_iterations || 0);
+    if (meta.completed_at) html += kvRow('Completed', meta.completed_at.substring(0, 19));
+    html += '</div></div>';
+
+    return html;
+  }
+
+  function renderGenericDetail(meta) {
+    if (!meta || Object.keys(meta).length === 0) {
+      return '<p class="detail-hint">No additional details for this node.</p>';
+    }
+    var html = '<div class="detail-section">';
+    html += '<div class="detail-section-title">Details</div>';
+    html += '<div class="detail-kv-list">';
     for (var k in meta) {
       if (!meta.hasOwnProperty(k)) continue;
       var v = meta[k];
-      if (typeof v === 'string' && v.length > 500) {
-        out[k] = v.substring(0, 500) + '...';
-      } else if (Array.isArray(v) && v.length > 10) {
-        out[k] = v.slice(0, 10).concat(['... (' + v.length + ' total)']);
-      } else {
-        out[k] = v;
+      if (typeof v === 'object') continue;
+      html += kvRow(humanizeKey(k), v);
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  function extractToolName(desc) {
+    var match = desc.match(/^(?:\[?tool[:\s_]*)?(\w+)/i);
+    return match ? match[1].toLowerCase() : '';
+  }
+
+  function describeToolAction(tool, desc, filePath) {
+    var d = desc.toLowerCase();
+    if (d.indexOf('read file') >= 0 || tool === 'file_read') {
+      return 'Read the contents of a file' + (filePath ? ' to understand the existing code.' : '.');
+    }
+    if (d.indexOf('write file') >= 0 || tool === 'file_write') {
+      return 'Wrote changes to a file' + (filePath ? ' as part of the fix.' : '.');
+    }
+    if (d.indexOf('search') >= 0 || tool === 'file_search') {
+      return 'Searched the codebase for relevant code patterns.';
+    }
+    if (d.indexOf('shell') >= 0 || d.indexOf('run') >= 0 || tool === 'shell_run') {
+      return 'Ran a shell command (e.g. tests, linters, or build tools).';
+    }
+    if (d.indexOf('git diff') >= 0 || tool === 'git_diff') {
+      return 'Checked the git diff to review what changed.';
+    }
+    if (d.indexOf('git commit') >= 0 || tool === 'git_commit') {
+      return 'Committed the changes to git.';
+    }
+    if (d.indexOf('github') >= 0 || tool === 'github_api') {
+      return 'Called the GitHub API (e.g. to fetch issue details or create a PR).';
+    }
+    if (d.indexOf('gh issue') >= 0) {
+      return 'Fetched issue details from GitHub to understand the bug report.';
+    }
+    if (d.indexOf('find') >= 0) {
+      return 'Searched the file tree to locate relevant source files.';
+    }
+    if (d.indexOf('go test') >= 0 || d.indexOf('pytest') >= 0 || d.indexOf('npm test') >= 0) {
+      return 'Ran the test suite to check if the fix works.';
+    }
+    if (d.indexOf('ruff') >= 0 || d.indexOf('lint') >= 0 || d.indexOf('golangci') >= 0) {
+      return 'Ran linting to check code quality.';
+    }
+    return 'Executed tool: <strong>' + escapeHtml(desc.substring(0, 80)) + '</strong>';
+  }
+
+  function extractReadableOutput(output) {
+    if (!output || typeof output !== 'object') return '';
+    var data = output.data || output;
+    if (typeof data === 'string') {
+      return data.length > 2000 ? data.substring(0, 2000) + '\n... (truncated)' : data;
+    }
+    if (data.stdout || data.stderr || data.output) {
+      var text = '';
+      if (data.stdout) text += data.stdout;
+      if (data.stderr) text += (text ? '\n---\n' : '') + data.stderr;
+      if (data.output && typeof data.output === 'string') text += (text ? '\n---\n' : '') + data.output;
+      if (!text) return '';
+      return text.length > 2000 ? text.substring(0, 2000) + '\n... (truncated)' : text;
+    }
+    if (data.content && typeof data.content === 'string') {
+      var c = data.content;
+      return c.length > 1500 ? c.substring(0, 1500) + '\n... (truncated)' : c;
+    }
+    return '';
+  }
+
+  function kvRow(key, val) {
+    return '<span class="kv-key">' + escapeHtml(humanizeKey(key)) + '</span>'
+      + '<span class="kv-val">' + escapeHtml(String(val)) + '</span>';
+  }
+
+  function humanizeKey(key) {
+    return key.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+  }
+
+  function truncate(s, max) {
+    if (typeof s !== 'string') return String(s);
+    return s.length > max ? s.substring(0, max) + '...' : s;
+  }
+
+  function formatDuration(ms) {
+    if (!ms || ms < 0) return '0ms';
+    if (ms < 1000) return Math.round(ms) + 'ms';
+    var s = ms / 1000;
+    if (s < 60) return s.toFixed(1) + 's';
+    var m = s / 60;
+    return m.toFixed(1) + 'm';
+  }
+
+  function renderExtraFields(meta) {
+    var html = '';
+    var skip = {'action_type':1,'description':1,'duration_ms':1,'input':1,'output':1,'llm_context':1,'provenance':1};
+    var extras = [];
+    for (var k in meta) {
+      if (!meta.hasOwnProperty(k) || skip[k]) continue;
+      extras.push(k);
+    }
+
+    var input = meta.input || {};
+    var inputExtras = {};
+    var inputSkip = {'description':1,'path':1,'context':1};
+    for (var ik in input) {
+      if (!input.hasOwnProperty(ik) || inputSkip[ik]) continue;
+      if (typeof input[ik] === 'string' && input[ik].length > 0) {
+        inputExtras[ik] = input[ik];
+      } else if (typeof input[ik] === 'number' || typeof input[ik] === 'boolean') {
+        inputExtras[ik] = input[ik];
       }
     }
-    return out;
+
+    var hasInputExtras = Object.keys(inputExtras).length > 0;
+    var hasExtras = extras.length > 0;
+
+    if (!hasInputExtras && !hasExtras) return '';
+
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">More Details</div>';
+    html += '<div class="detail-kv-list">';
+    for (var eik in inputExtras) {
+      if (!inputExtras.hasOwnProperty(eik)) continue;
+      html += kvRow(eik, renderValueInline(inputExtras[eik]));
+    }
+    for (var ei = 0; ei < extras.length; ei++) {
+      var ek = extras[ei];
+      html += kvRow(ek, renderValueInline(meta[ek]));
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  function renderValueInline(val) {
+    if (val == null) return '—';
+    if (typeof val === 'boolean') return val ? 'Yes' : 'No';
+    if (typeof val === 'number') return String(val);
+    if (typeof val === 'string') return val.length > 120 ? val.substring(0, 120) + '...' : val;
+    if (Array.isArray(val)) {
+      if (val.length === 0) return '(none)';
+      var items = val.slice(0, 5).map(function(v) {
+        return typeof v === 'string' ? v : (typeof v === 'object' ? '(' + Object.keys(v).length + ' fields)' : String(v));
+      });
+      return items.join(', ') + (val.length > 5 ? ' + ' + (val.length - 5) + ' more' : '');
+    }
+    if (typeof val === 'object') {
+      var keys = Object.keys(val);
+      if (keys.length === 0) return '(empty)';
+      var preview = keys.slice(0, 4).map(function(k) {
+        var v = val[k];
+        var short = typeof v === 'string' ? (v.length > 30 ? v.substring(0, 30) + '...' : v) : String(v);
+        return humanizeKey(k) + ': ' + short;
+      });
+      return preview.join(', ') + (keys.length > 4 ? ' + ' + (keys.length - 4) + ' more' : '');
+    }
+    return String(val);
   }
 
   function escapeHtml(s) {

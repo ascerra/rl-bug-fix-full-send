@@ -323,7 +323,7 @@ class TestPhasesConfig:
         assert cfg.phases.triage.enabled is True
         assert cfg.phases.implement.max_inner_iterations == 5
         assert cfg.phases.review.correctness is True
-        assert cfg.phases.validate.full_test_suite is True
+        assert cfg.phases.validate.full_test_suite is False
         assert cfg.phases.report.enabled is True
 
     def test_phases_config_from_yaml(self, tmp_path):

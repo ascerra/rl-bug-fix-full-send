@@ -477,13 +477,13 @@ class TestValidatePlan:
     @pytest.mark.asyncio
     async def test_plan_tests_skipped_when_disabled(self):
         cfg = EngineConfig()
-        cfg.phases.validate.full_test_suite = False
         cfg.phases.validate.ci_equivalent = False
         phase = _make_validate(config=cfg)
         obs = await phase.observe()
         plan = await phase.plan(obs)
         assert plan["test_result"]["passed"] is True
-        assert "skipped" in plan["test_result"]["output"].lower()
+        output = plan["test_result"]["output"].lower()
+        assert "not run" in output or "skipped" in output
         assert plan["lint_result"]["passed"] is True
         assert "skipped" in plan["lint_result"]["output"].lower()
 
@@ -587,7 +587,9 @@ class TestValidateValidate:
 
     @pytest.mark.asyncio
     async def test_validate_tests_failing(self):
-        phase = _make_validate()
+        cfg = EngineConfig()
+        cfg.phases.validate.test_execution_mode = "required"
+        phase = _make_validate(config=cfg)
         validation = await phase.validate(
             {
                 "validate_result": json.loads(_ready_response()),
@@ -718,7 +720,9 @@ class TestValidateReflect:
 
     @pytest.mark.asyncio
     async def test_tests_failing_backtracks_to_implement(self):
-        phase = _make_validate()
+        cfg = EngineConfig()
+        cfg.phases.validate.test_execution_mode = "required"
+        phase = _make_validate(config=cfg)
         result = await phase.reflect(
             {
                 "valid": False,
@@ -1113,6 +1117,7 @@ class TestValidateClassProperties:
 
     def test_config_validate_flags(self):
         cfg = EngineConfig()
-        assert cfg.phases.validate.full_test_suite is True
+        assert cfg.phases.validate.full_test_suite is False
         assert cfg.phases.validate.ci_equivalent is True
         assert cfg.phases.validate.minimal_diff_check is True
+        assert cfg.phases.validate.test_execution_mode == "disabled"

@@ -313,20 +313,23 @@ action:
 
 **Goal**: Fix the bug.
 
-**Inputs**: Triage report, repo clone, failing test (if available)
+**Inputs**: Triage report (including detected repository stack), repo clone, failing test (if available)
 
 **Actions**:
 1. Read triage report (validate independently — do not blindly trust triage conclusions)
-2. Analyze the identified files and surrounding code
-3. Formulate a fix strategy
-4. Implement the fix
-5. Run tests locally
-6. If tests fail → iterate on the fix (inner loop within the implementation phase)
-7. Run linters and repo-specific checks
+2. Inherit repository stack detection from triage (language, test command, lint command). Only re-detect as fallback if triage did not provide stack information.
+3. Analyze the identified files and surrounding code
+4. Formulate a fix strategy
+5. Implement the fix
+6. Run tests locally using the detected stack's test command (e.g., `go test` for Go, `pytest` for Python)
+7. If tests fail → iterate on the fix (inner loop within the implementation phase)
+8. Run linters using the detected stack's lint command (e.g., `golangci-lint` for Go, `ruff` for Python)
 
 **Outputs**: Code changes (diff), test results, lint results
 
 **Validation**: All existing tests pass, new test (if written in triage) passes, linters pass
+
+**Cross-phase context**: Triage serializes its `RepoStack` detection (language, test_command, lint_command, detected_from, confidence) into `PhaseResult.artifacts["detected_stack"]`. Implement and validate phases read this from `prior_results` before running any tests or linters. This prevents each phase from independently (and potentially incorrectly) re-detecting the repository language.
 
 ### 5.3 Review Phase
 
@@ -455,7 +458,8 @@ phases:
     write_failing_test: true
   implement:
     max_inner_iterations: 5
-    run_tests_after_each_edit: true
+    run_tests_after_each_edit: false
+    test_execution_mode: "disabled"  # "disabled" | "opportunistic" | "required"
     run_linters: true
   review:
     correctness: true
@@ -464,7 +468,8 @@ phases:
     style: true
     scope_check: true
   validate:
-    full_test_suite: true
+    full_test_suite: false
+    test_execution_mode: "disabled"  # "disabled" | "opportunistic" | "required"
     ci_equivalent: true
     minimal_diff_check: true
 

@@ -277,17 +277,20 @@ class TriagePhase(Phase):
                 self.logger.narrate(
                     f"Ambiguous but confident enough ({conf_display:.2f}). Proceeding as bug."
                 )
+                artifacts: dict[str, Any] = {
+                    "classification": "ambiguous_as_bug",
+                    "confidence": confidence,
+                    "verified_components": validation.get("verified_components", []),
+                }
+                if self._detected_stack is not None:
+                    artifacts["detected_stack"] = self._detected_stack.to_dict()
                 return PhaseResult(
                     phase=self.name,
                     success=True,
                     should_continue=True,
                     next_phase="implement",
                     findings=triage,
-                    artifacts={
-                        "classification": "ambiguous_as_bug",
-                        "confidence": confidence,
-                        "verified_components": validation.get("verified_components", []),
-                    },
+                    artifacts=artifacts,
                 )
             self.logger.narrate("Ambiguous with low confidence. Escalating.")
             return PhaseResult(
@@ -328,17 +331,20 @@ class TriagePhase(Phase):
             )
 
         self.logger.narrate("Triage complete. Classified as bug. Moving to implement.")
+        bug_artifacts: dict[str, Any] = {
+            "triage_report": triage,
+            "verified_components": validation.get("verified_components", []),
+            "reproduction": validation.get("reproduction", {}),
+        }
+        if self._detected_stack is not None:
+            bug_artifacts["detected_stack"] = self._detected_stack.to_dict()
         return PhaseResult(
             phase=self.name,
             success=True,
             should_continue=True,
             next_phase="implement",
             findings=triage,
-            artifacts={
-                "triage_report": triage,
-                "verified_components": validation.get("verified_components", []),
-                "reproduction": validation.get("reproduction", {}),
-            },
+            artifacts=bug_artifacts,
         )
 
     # ------------------------------------------------------------------

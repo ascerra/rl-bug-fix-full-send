@@ -89,7 +89,7 @@ def get_test_status() -> str:
             capture_output=True,
             text=True,
             cwd=ROOT,
-            timeout=120,
+            timeout=300,
         )
         last_line = [l for l in result.stdout.strip().splitlines() if l.strip()][-1]
         return last_line

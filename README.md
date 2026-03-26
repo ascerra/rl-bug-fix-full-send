@@ -196,7 +196,7 @@ xdg-open progress/index.html  # Linux
 **Phase 4: Integration Layer** — Complete (all sub-phases 4.1–4.4 done)
 **Phase 5: Hardening and Testing** — Complete (all sub-phases 5.1–5.4 done)
 **Phase 6: Self-Improvement Infrastructure** — Complete (all sub-phases 6.1–6.3 done)
-**Phase 7: Production Observability & Feedback Loops** — Complete (16 deficiencies cataloged from 4 production runs, all resolved)
+**Phase 7: Production Observability & Feedback Loops** — Complete (18 deficiencies cataloged from 5 production runs, all 18 resolved)
 
 | Component | Status | Module |
 |-----------|--------|--------|
@@ -235,9 +235,11 @@ xdg-open progress/index.html  # Linux
 | Golden principles enforcement | ✅ | `engine/golden_principles.py` — AST-based static analyzer: P1 logging, P3 untrusted separation, P5 iteration bounds, P8 provenance, P9 report publishing, P10 config usage. `make principles` CI gate |
 | Deterministic tool extraction | ✅ | `engine/tools/extraction.py` — `PatternDetector` + `ProposalGenerator`: scans execution records for repeated LLM patterns, proposes deterministic replacements (5 categories + caching fallback). CLI: `python -m engine.tools.extraction` |
 | Test runner detection | ✅ | `engine/tools/test_runner.py` — `detect_repo_stack()`: detects target repo language from manifests (go.mod, package.json, Cargo.toml, pyproject.toml) and file extensions, returns language-specific test/lint commands. Configurable via `test_command`/`lint_command` overrides in `.rl-config.yaml` |
+| Cross-phase stack handoff | ✅ | Triage serializes `RepoStack` into `PhaseResult.artifacts["detected_stack"]`. Implement and validate inherit via `_extract_triage_stack()` — prevents re-detection errors from truncated file listings (D17) |
+| Test execution mode (CI-first) | ✅ | `test_execution_mode` config field (`disabled`/`opportunistic`/`required`) on both implement and validate phases. Defaults to `disabled` — tests skipped locally, CI validates after PR. Auto-promotes to `opportunistic` when `test_command` configured |
 | Background quality scanner | ✅ | `engine/quality_scanner.py` — `BackgroundQualityScanner`: periodic scans combining golden principles, extraction proposals, code metrics. Auto-generates refactoring PR bodies. Weekly cron workflow. CLI: `python -m engine.quality_scanner` |
 
-**1887 tests passing**, lint clean, golden principles PASS. **16 production deficiencies** identified and cataloged in Phase 7 — all resolved (2 critical, 6 high, 4 medium, 4 low).
+**1945 tests passing**, lint clean, golden principles PASS. **18 production deficiencies** identified and cataloged in Phase 7 — all 18 resolved.
 
 ### Cross-Fork PR Workflow
 

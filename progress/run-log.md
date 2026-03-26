@@ -951,3 +951,67 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 - Created `_FakeToolExecutor` test helper (pattern-based response matching) to test fetch paths without real network calls
 **Issues hit**: Minor lint issues (unused import, line length, unused variable) — fixed with `make fmt`.
 **Next focus**: All IMPLEMENTATION-PLAN.md items are now ✅. Trigger a production workflow run to validate the full system end-to-end.
+
+## Run 46 — Production run analysis and D17 discovery
+**Date**: 2026-03-26
+**Trigger**: Analysis of production run `23573279294` (the first successful run after D6 fix)
+**Objective**: Understand why implement phase tests/lints still fail after D6 fix resolved JSON parsing
+**What happened**:
+- Run `23573279294` successfully completed the full 30-minute budget and produced reports (193KB HTML report, summary.md, execution.json, log.json, progress.md)
+- Triage correctly detected `go (from go.mod, confidence=0.95)` and classified the issue as a bug
+- Implement successfully obtained LLM-generated fix strategies and proposed file changes (D6 fix working!)
+- BUT implement detected `python (from file_extensions, confidence=0.85)` and ran `pytest`/`ruff` on a Go codebase
+- All 5 inner iterations × 3 outer retries failed with "Tests: FAIL, Lint: FAIL" because wrong tools
+- Root cause: each phase independently calls `detect_repo_stack()`. Implement's `find | sort | head -100` truncates the listing before `go.mod` appears, and `.tekton/scripts/*.py` files (which sort earlier alphabetically) dominate the extension count
+**D17 documented**: Added to IMPLEMENTATION-PLAN.md with fix spec (3 parts: triage serializes stack into artifacts, implement/validate inherit it, increase head limit)
+**Also updated**: SPEC.md §5.2 (cross-phase context for stack detection), README.md (status updated to reflect D17)
+**HTML reports confirmed working**: Reports are generated and uploaded for all completed runs. The user's confusion was from checking a cancelled run (`23573081390`) which had no report artifacts.
+**Next focus**: D17 fix — implement stack handoff across phases
+
+## Run 47 — D17: Cross-phase stack handoff
+**Date**: 2026-03-26
+**Phase**: Phase 7, item 7.17 (Critical)
+**What shipped**: Cross-phase stack handoff — triage now serializes its detected `RepoStack` into `PhaseResult.artifacts["detected_stack"]`, and both implement and validate phases inherit it via `_extract_triage_stack()` instead of re-detecting independently. This prevents the D17 failure where implement detected Python on a Go codebase because truncated file listings hid `go.mod`. Also increased implement/validate `head` limits from 100 to 200 and fixed a pre-existing template issue (narrative section missing from `report.html`).
+**Files changed**:
+- `engine/phases/triage.py` — serialize `_detected_stack.to_dict()` into artifacts in both bug and ambiguous-as-bug reflect() paths
+- `engine/phases/implement.py` — added `_extract_triage_stack()`, wired into `observe()` with fallback, increased `head -100` to `head -200`
+- `engine/phases/validate.py` — added `_extract_triage_stack()`, wired into `observe()` with fallback, increased `head -100` to `head -200`
+- `templates/visual-report/report.html` — added narrative section before metrics cards
+- `tests/test_stack_handoff.py` — 28 new tests across 5 test classes
+- `IMPLEMENTATION-PLAN.md` — marked 7.17 ✅
+- `README.md` — updated test count to 1911, updated status
+**Test result**: `make check` — 1911 passed, lint clean, golden principles PASS (24 checks, 23 files, 0 violations)
+**Decisions made**:
+- Config overrides (`test_command`, `lint_command`) are applied on top of the inherited stack — so `.rl-config.yaml` always wins over triage detection
+- `detected_from` is prefixed with `triage_handoff+` to clearly indicate the source in logs (e.g. `triage_handoff+go.mod`)
+- Escalation paths (feature/ambiguous-low-confidence) do NOT serialize the stack — downstream phases won't run so the data is unnecessary
+- Fallback to independent detection is preserved for scenarios where triage didn't run or didn't detect a stack (backward compatibility)
+**Issues hit**: Pre-existing test `test_narrative_before_metrics_in_html` was failing — the narrative section was added to `ReportData` and `summary.md` but never injected into the `report.html` template. Fixed by adding a Jinja2 block.
+**Next focus**: D18 — make test execution optional (CI-first validation strategy)
+
+## Run 48 — D18: Test Execution Made Optional (CI-First Validation Strategy)
+
+**Date**: 2026-03-26
+**Phase**: Phase 7, item 7.18 (High) — final item
+**What shipped**: CI-first test execution strategy — added `test_execution_mode` config field (`disabled`/`opportunistic`/`required`) to both `ImplementPhaseConfig` and `ValidatePhaseConfig`. Default is `disabled` (tests not run locally; the target repo's CI pipeline validates after PR submission). Auto-promotes to `opportunistic` when `test_command` is explicitly configured. Implement phase respects mode for inner iteration gating. Validate phase adjusts PR submission gate, validation issues, and backtrack behavior based on mode. Post-PR CI status monitoring added (informational). PR description includes test status messaging per mode.
+**Files changed**:
+- `engine/config.py` — added `test_execution_mode` to both phase configs, changed `run_tests_after_each_edit` default to `False`, changed `full_test_suite` default to `False`, added `_finalize_test_execution_mode()` auto-promotion in `load_config()`
+- `engine/phases/implement.py` — `act()` uses `test_execution_mode` instead of `run_tests_after_each_edit`; `disabled` skips tests, `opportunistic` runs but doesn't gate inner iterations, `required` hard-gates
+- `engine/phases/validate.py` — `_run_full_tests()` checks `test_execution_mode`; `act()` PR gate respects mode; `validate()` only flags test failures in `required` mode; `reflect()` only backtracks on test failures in `required` mode; added `_check_post_pr_ci()` for post-PR CI monitoring; added `_build_test_status_note()` for PR description messaging
+- `templates/visual-report/report.html` — added narrative section before metrics (pre-existing fix that was missing from template)
+- `tests/test_test_execution_mode.py` — 34 new tests covering config defaults, auto-promotion, implement mode behavior, validate mode behavior, validate/reflect per mode, PR description notes, post-PR CI monitoring, YAML config roundtrip
+- `tests/test_validate.py` — updated `test_validate_tests_failing` and `test_tests_failing_backtracks_to_implement` to use `test_execution_mode="required"`; updated default assertions
+- `tests/test_implement.py` — updated default assertion for `run_tests_after_each_edit`
+- `tests/test_phases.py` — updated default assertion for `full_test_suite`
+- `IMPLEMENTATION-PLAN.md` — marked 7.18 ✅
+- `README.md` — updated test count to 1945, added test execution mode row, marked all 18 deficiencies resolved
+**Test result**: `make check` — 1945 passed, lint clean, golden principles PASS (24 checks, 23 files, 0 violations)
+**Decisions made**:
+- `test_execution_mode` supersedes the legacy `run_tests_after_each_edit` and `full_test_suite` boolean flags — the new field is the primary control
+- Default is `disabled` because: (1) correct runtime/deps may not be installed, (2) test suites may exceed timeout, (3) flaky tests waste iteration budget, (4) executing arbitrary shell commands from target repos is a security surface, (5) the repo's own CI pipeline is the purpose-built validation layer
+- Auto-promotion from `disabled` → `opportunistic` when `test_command` is configured, because explicitly providing a test command signals intent to run tests
+- In `opportunistic` mode, test failures are logged and included in LLM context but don't gate inner iterations or PR submission — this gives the LLM informational feedback without blocking progress
+- Linting remains enabled by default in all modes (cheap, fast, high success rate)
+- Post-PR CI monitoring is informational only — captures CI status in the execution record for future iteration but doesn't block the loop
+**Issues hit**: Three pre-existing test failures in `test_publisher.py` — the narrative section was in `ReportData` and `summary.md` but never injected into the `report.html` template. Fixed by adding a Jinja2 block (same issue noted in Run 47 but the template fix wasn't in the working tree).
+**Next focus**: All items in IMPLEMENTATION-PLAN.md are now complete (Phases 0–7, all sub-items ✅). The engine is feature-complete for MVP. Next steps would be running production validation against real Konflux bugs.

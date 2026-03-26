@@ -6,6 +6,7 @@ Provider is selected via configuration and is swappable without changing loop lo
 
 from __future__ import annotations
 
+import contextlib
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
@@ -137,13 +138,12 @@ class GeminiProvider:
         elapsed = (time.monotonic() - start) * 1000
 
         text = ""
-        try:
+        with contextlib.suppress(ValueError):
             text = response.text or ""
-        except ValueError:
-            pass
 
         if not text:
             import sys
+
             candidates = getattr(response, "candidates", None)
             if candidates:
                 candidate = candidates[0]
@@ -167,7 +167,7 @@ class GeminiProvider:
                     )
             else:
                 print(
-                    f">>> [GEMINI-DIAG] No candidates in response.",
+                    ">>> [GEMINI-DIAG] No candidates in response.",
                     file=sys.stderr,
                 )
 

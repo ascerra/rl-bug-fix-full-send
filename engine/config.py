@@ -59,11 +59,12 @@ class TriagePhaseConfig:
 class ImplementPhaseConfig:
     enabled: bool = True
     max_inner_iterations: int = 5
-    run_tests_after_each_edit: bool = True
+    run_tests_after_each_edit: bool = False
     run_linters: bool = True
     max_parse_retries: int = 3
     test_command: str = ""
     lint_command: str = ""
+    test_execution_mode: str = "disabled"
 
 
 @dataclass
@@ -79,11 +80,12 @@ class ReviewPhaseConfig:
 @dataclass
 class ValidatePhaseConfig:
     enabled: bool = True
-    full_test_suite: bool = True
+    full_test_suite: bool = False
     ci_equivalent: bool = True
     minimal_diff_check: bool = True
     test_command: str = ""
     lint_command: str = ""
+    test_execution_mode: str = "disabled"
 
 
 @dataclass
@@ -154,7 +156,24 @@ def load_config(
     if overrides:
         config = _apply_raw_config(config, overrides)
 
+    _finalize_test_execution_mode(config)
+
     return config
+
+
+def _finalize_test_execution_mode(config: EngineConfig) -> None:
+    """Auto-promote test_execution_mode when test_command is explicitly configured.
+
+    When a repo provides an explicit ``test_command`` but does not set
+    ``test_execution_mode``, the mode is promoted from ``"disabled"`` to
+    ``"opportunistic"`` so that tests run but don't hard-gate the loop.
+    """
+    impl = config.phases.implement
+    if impl.test_command and impl.test_execution_mode == "disabled":
+        impl.test_execution_mode = "opportunistic"
+    val = config.phases.validate
+    if val.test_command and val.test_execution_mode == "disabled":
+        val.test_execution_mode = "opportunistic"
 
 
 def _apply_raw_config(config: EngineConfig, raw: dict[str, Any]) -> EngineConfig:

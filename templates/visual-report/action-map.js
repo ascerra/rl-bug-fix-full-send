@@ -240,40 +240,134 @@ function renderActionMap(data, containerId, detailPanelId) {
 
   function showDetail(node) {
     if (!detailPanel) return;
-    var html = '<h3>' + escapeHtml(node.description) + '</h3>';
-    html += '<p>'
-      + '<span class="action-type action-type-' + escapeHtml(node.action_type) + '">'
-      + escapeHtml(node.action_type) + '</span>'
-      + ' &nbsp;|&nbsp; <strong>Status:</strong> '
-      + '<span style="color:' + (node.status === 'success' ? '#3fb950' : '#f85149') + '">'
-      + escapeHtml(node.status) + '</span>'
-      + ' &nbsp;|&nbsp; <strong>Tokens:</strong> ' + node.tokens
-      + ' &nbsp;|&nbsp; <strong>Duration:</strong> ' + escapeHtml(formatDuration(node.duration_ms))
-      + '</p>';
+    var meta = node.meta || {};
+    var html = '';
 
-    if (node.meta && Object.keys(node.meta).length > 0) {
-      var filtered = filterMeta(node.meta);
-      html += '<pre>' + escapeHtml(JSON.stringify(filtered, null, 2)) + '</pre>';
+    html += '<h3>' + escapeHtml(node.description) + '</h3>';
+
+    /* Status bar */
+    var statusColor = node.status === 'success' ? '#3fb950' : '#f85149';
+    var statusClass = node.status === 'success' ? 'status-success' : 'status-failure';
+    html += '<div class="detail-status-bar">';
+    html += '<span class="badge ' + statusClass + '">' + escapeHtml(node.status) + '</span>';
+    html += '<span class="action-type action-type-' + escapeHtml(node.action_type) + '">' + escapeHtml(node.action_type.replace(/_/g, ' ')) + '</span>';
+    html += '<span class="detail-duration">' + escapeHtml(formatDuration(node.duration_ms));
+    if (node.tokens > 0) html += ' · ' + node.tokens + ' tokens';
+    html += '</span>';
+    html += '</div>';
+
+    /* Human-readable narrative */
+    html += '<div class="detail-narrative">';
+    var desc = (meta.full_description || node.description || '').toLowerCase();
+    var input = meta.input || {};
+    var output = meta.output || {};
+
+    if (node.action_type === 'llm_query') {
+      html += '<p>The agent asked the AI model to <strong>' + escapeHtml((meta.full_description || node.description).toLowerCase()) + '</strong>.</p>';
+      var prov = meta.provenance || {};
+      if (prov.model) {
+        html += '<p>Model: <strong>' + escapeHtml(prov.model) + '</strong>';
+        if (prov.provider) html += ' via ' + escapeHtml(prov.provider);
+        html += '</p>';
+      }
+      var ctx = meta.llm_context || {};
+      if (ctx.tokens_in || ctx.tokens_out) {
+        html += '<p>' + (ctx.tokens_in || 0) + ' tokens in, ' + (ctx.tokens_out || 0) + ' tokens out</p>';
+      }
+      if (output.success === false && output.error) {
+        html += '<p style="color:var(--failure)">Failed: ' + escapeHtml(truncate(output.error, 200)) + '</p>';
+      }
+    } else if (node.action_type === 'tool_execution') {
+      html += '<p>' + describeToolAction(desc, input) + '</p>';
+      var filePath = input.path || (input.context && input.context.path) || '';
+      if (filePath) html += '<p>File: <span class="detail-file-path">' + escapeHtml(filePath) + '</span></p>';
+      if (output.success) {
+        html += '<p style="color:var(--success)">Completed successfully</p>';
+      } else if (output.success === false) {
+        html += '<p style="color:var(--failure)">Failed';
+        if (output.error) html += ': ' + escapeHtml(truncate(output.error, 200));
+        html += '</p>';
+      }
+    } else if (node.action_type === 'escalation') {
+      html += '<p style="color:var(--failure)"><strong>The agent escalated this issue for human review.</strong></p>';
+    } else {
+      html += '<p>' + escapeHtml(meta.full_description || node.description) + '</p>';
+    }
+    html += '</div>';
+
+    /* Readable output */
+    var outputDisplay = extractReadableOutput(output);
+    if (outputDisplay) {
+      html += '<div class="detail-section">';
+      html += '<div class="detail-section-title">Result</div>';
+      html += '<div class="detail-code-block">' + escapeHtml(outputDisplay) + '</div>';
+      html += '</div>';
+    }
+
+    /* Phase context */
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">Context</div>';
+    html += '<div class="detail-kv-list">';
+    html += kvRow('Phase', node.phase);
+    html += kvRow('Iteration', '#' + node.iteration);
+    if (node.duration_ms) html += kvRow('Duration', formatDuration(node.duration_ms));
+    if (meta.timestamp) html += kvRow('Timestamp', meta.timestamp.substring(0, 19));
+    html += '</div></div>';
+
+    /* Extra structured details */
+    if (meta) {
+      html += renderExtraFields(meta);
     }
 
     detailPanel.innerHTML = html;
     detailPanel.style.display = 'block';
   }
 
-  function filterMeta(meta) {
-    var out = {};
-    for (var k in meta) {
-      if (!meta.hasOwnProperty(k)) continue;
-      var v = meta[k];
-      if (typeof v === 'string' && v.length > 500) {
-        out[k] = v.substring(0, 500) + '...';
-      } else if (Array.isArray(v) && v.length > 10) {
-        out[k] = v.slice(0, 10).concat(['... (' + v.length + ' total)']);
-      } else {
-        out[k] = v;
-      }
+  function describeToolAction(desc, input) {
+    if (desc.indexOf('read file') >= 0 || desc.indexOf('file_read') >= 0) return 'Read the contents of a file to understand the existing code.';
+    if (desc.indexOf('write file') >= 0 || desc.indexOf('file_write') >= 0) return 'Wrote changes to a file as part of the fix.';
+    if (desc.indexOf('search') >= 0 || desc.indexOf('file_search') >= 0) return 'Searched the codebase for relevant code patterns.';
+    if (desc.indexOf('shell') >= 0 || desc.indexOf('run:') >= 0) return 'Ran a shell command (e.g. tests, linters, or build tools).';
+    if (desc.indexOf('git diff') >= 0) return 'Checked the git diff to review what changed.';
+    if (desc.indexOf('git commit') >= 0) return 'Committed the changes to git.';
+    if (desc.indexOf('github') >= 0 || desc.indexOf('gh issue') >= 0) return 'Called the GitHub API to fetch issue details or interact with the repository.';
+    if (desc.indexOf('find') >= 0) return 'Searched the file tree to locate relevant source files.';
+    if (desc.indexOf('go test') >= 0 || desc.indexOf('pytest') >= 0 || desc.indexOf('npm test') >= 0) return 'Ran the test suite to check if the fix works.';
+    if (desc.indexOf('ruff') >= 0 || desc.indexOf('lint') >= 0 || desc.indexOf('golangci') >= 0) return 'Ran linting to check code quality.';
+    return 'Executed a tool action.';
+  }
+
+  function extractReadableOutput(output) {
+    if (!output || typeof output !== 'object') return '';
+    var data = output.data || output;
+    if (typeof data === 'string') return data.length > 2000 ? data.substring(0, 2000) + '\n... (truncated)' : data;
+    if (data.stdout || data.stderr || data.output) {
+      var text = '';
+      if (data.stdout) text += data.stdout;
+      if (data.stderr) text += (text ? '\n---\n' : '') + data.stderr;
+      if (data.output && typeof data.output === 'string') text += (text ? '\n---\n' : '') + data.output;
+      if (!text) return '';
+      return text.length > 2000 ? text.substring(0, 2000) + '\n... (truncated)' : text;
     }
-    return out;
+    if (data.content && typeof data.content === 'string') {
+      var c = data.content;
+      return c.length > 1500 ? c.substring(0, 1500) + '\n... (truncated)' : c;
+    }
+    return '';
+  }
+
+  function kvRow(key, val) {
+    return '<span class="kv-key">' + escapeHtml(humanizeKey(key)) + '</span>'
+      + '<span class="kv-val">' + escapeHtml(String(val)) + '</span>';
+  }
+
+  function humanizeKey(key) {
+    return key.replace(/_/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); });
+  }
+
+  function truncate(s, max) {
+    if (typeof s !== 'string') return String(s);
+    return s.length > max ? s.substring(0, max) + '...' : s;
   }
 
   function formatDuration(ms) {
@@ -283,6 +377,72 @@ function renderActionMap(data, containerId, detailPanelId) {
     if (s < 60) return s.toFixed(1) + 's';
     var m = s / 60;
     return m.toFixed(1) + 'm';
+  }
+
+  function renderExtraFields(meta) {
+    var html = '';
+    var skip = {'full_description':1,'input':1,'output':1,'llm_context':1,'provenance':1,'timestamp':1};
+    var extras = [];
+    for (var k in meta) {
+      if (!meta.hasOwnProperty(k) || skip[k]) continue;
+      extras.push(k);
+    }
+
+    var input = meta.input || {};
+    var inputExtras = {};
+    var inputSkip = {'description':1,'path':1,'context':1};
+    for (var ik in input) {
+      if (!input.hasOwnProperty(ik) || inputSkip[ik]) continue;
+      if (typeof input[ik] === 'string' && input[ik].length > 0) {
+        inputExtras[ik] = input[ik];
+      } else if (typeof input[ik] === 'number' || typeof input[ik] === 'boolean') {
+        inputExtras[ik] = input[ik];
+      }
+    }
+
+    var hasInputExtras = Object.keys(inputExtras).length > 0;
+    var hasExtras = extras.length > 0;
+
+    if (!hasInputExtras && !hasExtras) return '';
+
+    html += '<div class="detail-section">';
+    html += '<div class="detail-section-title">More Details</div>';
+    html += '<div class="detail-kv-list">';
+    for (var eik in inputExtras) {
+      if (!inputExtras.hasOwnProperty(eik)) continue;
+      html += kvRow(eik, renderValueInline(inputExtras[eik]));
+    }
+    for (var ei = 0; ei < extras.length; ei++) {
+      var ek = extras[ei];
+      html += kvRow(ek, renderValueInline(meta[ek]));
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  function renderValueInline(val) {
+    if (val == null) return '—';
+    if (typeof val === 'boolean') return val ? 'Yes' : 'No';
+    if (typeof val === 'number') return String(val);
+    if (typeof val === 'string') return val.length > 120 ? val.substring(0, 120) + '...' : val;
+    if (Array.isArray(val)) {
+      if (val.length === 0) return '(none)';
+      var items = val.slice(0, 5).map(function(v) {
+        return typeof v === 'string' ? v : (typeof v === 'object' ? '(' + Object.keys(v).length + ' fields)' : String(v));
+      });
+      return items.join(', ') + (val.length > 5 ? ' + ' + (val.length - 5) + ' more' : '');
+    }
+    if (typeof val === 'object') {
+      var keys = Object.keys(val);
+      if (keys.length === 0) return '(empty)';
+      var preview = keys.slice(0, 4).map(function(k) {
+        var v = val[k];
+        var short = typeof v === 'string' ? (v.length > 30 ? v.substring(0, 30) + '...' : v) : String(v);
+        return humanizeKey(k) + ': ' + short;
+      });
+      return preview.join(', ') + (keys.length > 4 ? ' + ' + (keys.length - 4) + ' more' : '');
+    }
+    return String(val);
   }
 
   function escapeHtml(s) {

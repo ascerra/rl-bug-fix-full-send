@@ -69,22 +69,31 @@ class ValidatePhase(Phase):
                     "-o -name '*.yaml' -o -name '*.yml' -o -name '*.rs' "
                     "-o -name 'go.mod' -o -name 'Cargo.toml' -o -name 'package.json' "
                     "-o -name 'pyproject.toml' -o -name 'Makefile' \\) "
-                    "| grep -v node_modules | grep -v __pycache__ | sort | head -100"
+                    "| grep -v node_modules | grep -v __pycache__ | sort | head -200"
                 ),
             )
             if tree_result.get("success"):
                 repo_listing = tree_result.get("stdout", "")
 
-        self._detected_stack = detect_repo_stack(
-            repo_listing,
-            test_command_override=self.config.phases.validate.test_command,
-            lint_command_override=self.config.phases.validate.lint_command,
-        )
-        self.logger.info(
-            f"Detected repo stack: {self._detected_stack.language} "
-            f"(from {self._detected_stack.detected_from}, "
-            f"confidence={self._detected_stack.confidence:.2f})"
-        )
+        triage_stack = self._extract_triage_stack()
+        if triage_stack is not None:
+            self._detected_stack = triage_stack
+            self.logger.info(
+                f"Inherited repo stack from triage: {self._detected_stack.language} "
+                f"(from {self._detected_stack.detected_from}, "
+                f"confidence={self._detected_stack.confidence:.2f})"
+            )
+        else:
+            self._detected_stack = detect_repo_stack(
+                repo_listing,
+                test_command_override=self.config.phases.validate.test_command,
+                lint_command_override=self.config.phases.validate.lint_command,
+            )
+            self.logger.info(
+                f"Detected repo stack (independent): {self._detected_stack.language} "
+                f"(from {self._detected_stack.detected_from}, "
+                f"confidence={self._detected_stack.confidence:.2f})"
+            )
 
         n_files = len(files_changed)
         has_review = bool(review_report)
@@ -106,6 +115,7 @@ class ValidatePhase(Phase):
         """Run independent checks and call LLM for minimal-diff assessment and PR description."""
         self.logger.info("Planning: running independent checks and generating PR description")
 
+        test_exec_mode = self.config.phases.validate.test_execution_mode
         test_result = await self._run_full_tests()
         lint_result = await self._run_linters()
 
@@ -135,6 +145,10 @@ class ValidatePhase(Phase):
             f"{'PASS' if lint_result['passed'] else 'FAIL'}\n"
             f"Lint output:\n{lint_result['output'][:2000]}"
         )
+
+        test_status_note = _build_test_status_note(test_exec_mode, test_result)
+        if test_status_note:
+            trusted_context += f"\n\n{test_status_note}"
 
         untrusted = self._wrap_untrusted_content(
             f"Issue title: {issue_title}\n\n"
@@ -166,9 +180,10 @@ class ValidatePhase(Phase):
 
         t_pass = "PASS" if test_result.get("passed") else "FAIL"
         l_pass = "PASS" if lint_result.get("passed") else "FAIL"
+        mode_label = f" ({test_exec_mode})" if test_exec_mode != "required" else ""
         ready = validate_result.get("ready_to_submit", False)
         self.logger.narrate(
-            f"Independent checks — tests: {t_pass}, lint: {l_pass}. "
+            f"Independent checks — tests: {t_pass}{mode_label}, lint: {l_pass}. "
             f"Ready to submit: {'yes' if ready else 'no'}."
         )
 
@@ -190,25 +205,34 @@ class ValidatePhase(Phase):
         observation = plan.get("observation", {})
         actions: list[dict[str, Any]] = []
 
+        test_exec_mode = self.config.phases.validate.test_execution_mode
+        tests_gate = test_exec_mode == "required"
+
         ready = validate_result.get("ready_to_submit", False)
         tests_ok = test_result.get("passed", False)
         lint_ok = lint_result.get("passed", False)
 
+        can_create_pr = ready and lint_ok and (tests_ok or not tests_gate)
+
         pr_created = False
         pr_url = ""
+        ci_status: dict[str, Any] = {}
 
-        if ready and tests_ok and lint_ok and self.tool_executor:
+        if can_create_pr and self.tool_executor:
             pr_result = await self._create_pr(validate_result, observation, actions)
             pr_created = pr_result.get("created", False)
             pr_url = pr_result.get("url", "")
 
+            if pr_created:
+                ci_status = await self._check_post_pr_ci(observation, actions)
+
         if pr_created:
             self.logger.narrate(f"PR created: {pr_url}")
-        elif ready and tests_ok and lint_ok:
+        elif can_create_pr:
             self.logger.narrate("PR creation skipped (no tool executor).")
         else:
             blocking = []
-            if not tests_ok:
+            if not tests_ok and tests_gate:
                 blocking.append("tests failing")
             if not lint_ok:
                 blocking.append("lint failing")
@@ -222,6 +246,7 @@ class ValidatePhase(Phase):
             "lint_result": lint_result,
             "pr_created": pr_created,
             "pr_url": pr_url,
+            "ci_status": ci_status,
             "actions": actions,
         }
 
@@ -229,6 +254,7 @@ class ValidatePhase(Phase):
         """Check that validation is structurally sound and checks passed."""
         self.logger.info("Validating: checking validation results")
 
+        test_exec_mode = self.config.phases.validate.test_execution_mode
         validate_result = action_result.get("validate_result", {})
         test_result = action_result.get("test_result", {})
         lint_result = action_result.get("lint_result", {})
@@ -241,7 +267,7 @@ class ValidatePhase(Phase):
         if not validate_result.get("pr_description"):
             issues.append("Missing PR description")
 
-        if not test_result.get("passed", False):
+        if not test_result.get("passed", False) and test_exec_mode == "required":
             issues.append(f"Tests failing: {test_result.get('output', 'unknown')[:200]}")
 
         if not lint_result.get("passed", False):
@@ -296,10 +322,15 @@ class ValidatePhase(Phase):
         issues = validation.get("issues", [])
         self.logger.warn(f"Validation issues: {issues}")
 
+        test_exec_mode = self.config.phases.validate.test_execution_mode
         tests_passing = validation.get("tests_passing", False)
         linters_passing = validation.get("linters_passing", False)
 
-        if not tests_passing or not linters_passing:
+        should_backtrack = not linters_passing or (
+            not tests_passing and test_exec_mode == "required"
+        )
+
+        if should_backtrack:
             self.logger.narrate("Tests or lint failing. Back to implement.")
             return PhaseResult(
                 phase=self.name,
@@ -328,6 +359,30 @@ class ValidatePhase(Phase):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    def _extract_triage_stack(self) -> RepoStack | None:
+        """Inherit the detected repo stack from the triage phase.
+
+        Triage serializes its ``RepoStack`` into ``PhaseResult.artifacts["detected_stack"]``.
+        Using the triage stack prevents re-detection errors caused by truncated file
+        listings (D17).  Config overrides for test/lint commands are applied on top.
+        """
+        for result in reversed(self.prior_results):
+            if result.phase != "triage" or not result.success:
+                continue
+            stack_dict = result.artifacts.get("detected_stack")
+            if not isinstance(stack_dict, dict) or "language" not in stack_dict:
+                continue
+            test_override = self.config.phases.validate.test_command
+            lint_override = self.config.phases.validate.lint_command
+            return RepoStack(
+                language=stack_dict["language"],
+                test_command=test_override or stack_dict.get("test_command", ""),
+                lint_command=lint_override or stack_dict.get("lint_command", ""),
+                detected_from=f"triage_handoff+{stack_dict.get('detected_from', 'unknown')}",
+                confidence=float(stack_dict.get("confidence", 0.0)),
+            )
+        return None
+
     def _extract_review_report(self) -> dict[str, Any]:
         """Extract the review report from prior phase results."""
         for result in reversed(self.prior_results):
@@ -351,9 +406,15 @@ class ValidatePhase(Phase):
         return {}
 
     async def _run_full_tests(self) -> dict[str, Any]:
-        """Run the full test suite using the detected repo stack's test command."""
-        if not self.config.phases.validate.full_test_suite or not self.tool_executor:
-            return {"passed": True, "output": "Tests skipped by config"}
+        """Run the full test suite using the detected repo stack's test command.
+
+        Respects ``test_execution_mode``: ``"disabled"`` skips tests entirely,
+        ``"opportunistic"`` and ``"required"`` both run tests (the difference
+        is how failures are handled downstream).
+        """
+        test_exec_mode = self.config.phases.validate.test_execution_mode
+        if test_exec_mode == "disabled" or not self.tool_executor:
+            return {"passed": True, "output": "Tests not run locally — CI will validate"}
 
         cmd = (
             self._detected_stack.test_command
@@ -364,6 +425,40 @@ class ValidatePhase(Phase):
         result = await self.tool_executor.execute("shell_run", command=cmd, timeout=120)
         output = result.get("stdout", "") + result.get("stderr", "")
         return {"passed": result.get("success", False), "output": output[:3000]}
+
+    async def _check_post_pr_ci(
+        self,
+        observation: dict[str, Any],
+        actions: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Poll the PR's initial CI status after creation (informational).
+
+        The engine does not iterate on CI feedback yet, but the data is
+        captured in the execution record for future use.
+        """
+        if not self.tool_executor:
+            return {}
+
+        issue_url = self.issue_data.get("url", "")
+        repo_endpoint = self._extract_repo_endpoint(issue_url)
+        if not repo_endpoint:
+            return {}
+
+        result = await self.tool_executor.execute(
+            "github_api",
+            method="GET",
+            endpoint=f"/repos/{repo_endpoint}/commits/rl/fix/status",
+        )
+
+        ci_state = "unknown"
+        if result.get("success"):
+            body = result.get("body", {})
+            if isinstance(body, dict):
+                ci_state = body.get("state", "unknown")
+
+        self.logger.narrate(f"Initial CI status: {ci_state}")
+        actions.append({"action": "check_ci_status", "status": ci_state})
+        return {"state": ci_state}
 
     async def _run_linters(self) -> dict[str, Any]:
         """Run linters using the detected repo stack's lint command."""
@@ -481,6 +576,26 @@ class ValidatePhase(Phase):
         except (IndexError, ValueError):
             pass
         return ""
+
+
+def _build_test_status_note(test_exec_mode: str, test_result: dict[str, Any]) -> str:
+    """Build a note for the LLM trusted context about the test execution strategy.
+
+    Ensures the PR description includes appropriate messaging about test
+    status when tests are skipped or run opportunistically.
+    """
+    if test_exec_mode == "disabled":
+        return (
+            "NOTE FOR PR DESCRIPTION: Tests were not run locally. Include this "
+            "in the PR description: 'Tests not run locally — CI will validate.'"
+        )
+    if test_exec_mode == "opportunistic" and not test_result.get("passed", False):
+        return (
+            "NOTE FOR PR DESCRIPTION: Local tests ran with failures. Include this "
+            "in the PR description: 'Local tests ran with failures; see details "
+            "below — CI will validate.'"
+        )
+    return ""
 
 
 def parse_validate_response(content: str) -> dict[str, Any]:
