@@ -253,6 +253,8 @@ class ValidatePhase(Phase):
             "lint_result": lint_result,
             "pr_created": pr_created,
             "pr_url": pr_url,
+            "pr_error": pr_error,
+            "can_create_pr": can_create_pr,
             "ci_status": ci_status,
             "actions": actions,
         }
@@ -298,6 +300,8 @@ class ValidatePhase(Phase):
             "ready_to_submit": validate_result.get("ready_to_submit", False),
             "pr_created": action_result.get("pr_created", False),
             "pr_url": action_result.get("pr_url", ""),
+            "pr_error": action_result.get("pr_error", ""),
+            "can_create_pr": action_result.get("can_create_pr", False),
             "validate_result": validate_result,
         }
 
@@ -308,7 +312,33 @@ class ValidatePhase(Phase):
         validate_result = validation.get("validate_result", {})
 
         if validation.get("valid"):
-            pr_status = "created" if validation.get("pr_created") else "pending"
+            pr_created = validation.get("pr_created", False)
+            can_create_pr = validation.get("can_create_pr", False)
+
+            if can_create_pr and not pr_created:
+                pr_error = validation.get("pr_error", "unknown")
+                self.logger.narrate(
+                    f"Validation passed but PR creation failed: {pr_error}. "
+                    f"Escalating — fix is ready but could not be submitted."
+                )
+                return PhaseResult(
+                    phase=self.name,
+                    success=False,
+                    should_continue=False,
+                    escalate=True,
+                    escalation_reason=f"PR creation failed: {pr_error}",
+                    findings=validate_result,
+                    artifacts={
+                        "pr_created": False,
+                        "pr_error": pr_error,
+                        "pr_description": validate_result.get("pr_description", ""),
+                        "tests_passing": validation.get("tests_passing", False),
+                        "linters_passing": validation.get("linters_passing", False),
+                        "diff_is_minimal": validation.get("diff_is_minimal", False),
+                    },
+                )
+
+            pr_status = "created" if pr_created else "pending"
             self.logger.narrate(f"Validation passed. PR {pr_status}. Moving to report.")
             return PhaseResult(
                 phase=self.name,
@@ -318,7 +348,7 @@ class ValidatePhase(Phase):
                 findings=validate_result,
                 artifacts={
                     "pr_url": validation.get("pr_url", ""),
-                    "pr_created": validation.get("pr_created", False),
+                    "pr_created": pr_created,
                     "pr_description": validate_result.get("pr_description", ""),
                     "tests_passing": validation.get("tests_passing", False),
                     "linters_passing": validation.get("linters_passing", False),
@@ -564,12 +594,15 @@ class ValidatePhase(Phase):
 
         success = result.get("success", False)
         pr_url = ""
+        error = ""
         if success:
             body = result.get("body", {})
             pr_url = body.get("html_url", "")
+        else:
+            error = result.get("error", "") or result.get("stderr", "") or "GitHub API call failed"
 
         actions.append({"action": "create_pr", "success": success, "pr_url": pr_url})
-        return {"created": success, "url": pr_url}
+        return {"created": success, "url": pr_url, "error": error}
 
     @staticmethod
     def _extract_repo_endpoint(issue_url: str) -> str:
