@@ -47,10 +47,16 @@ class ImplementPhase(Phase):
             self.logger.info(f"Retry context: {retry_count} prior failed attempt(s)")
 
         if review_feedback:
+            findings_list = review_feedback.get("findings", [])
             self.logger.info(
                 f"Review feedback present (verdict={review_feedback.get('verdict')}, "
-                f"findings={len(review_feedback.get('findings', []))})"
+                f"findings={len(findings_list)})"
             )
+            for i, finding in enumerate(findings_list, 1):
+                dim = finding.get("dimension", "?")
+                sev = finding.get("severity", "?")
+                desc = finding.get("description", "No description")
+                self.logger.narrate(f"  Review finding #{i} ({dim}/{sev}): {desc}")
 
         affected_components = [
             c if isinstance(c, str) else c.get("path", "")

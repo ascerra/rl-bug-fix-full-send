@@ -135,6 +135,14 @@ class ReviewPhase(Phase):
         self.logger.narrate(
             f"Review verdict: {verdict}. {n_findings} finding(s). Confidence: {conf_str}."
         )
+        for i, finding in enumerate(review_result.get("findings", []), 1):
+            dim = finding.get("dimension", "?")
+            sev = finding.get("severity", "?")
+            desc = finding.get("description", "No description")
+            file_ref = finding.get("file", "")
+            line_ref = finding.get("line", "")
+            loc = f" [{file_ref}:{line_ref}]" if file_ref else ""
+            self.logger.narrate(f"  Finding #{i} ({dim}/{sev}){loc}: {desc}")
 
         return {
             "review_result": review_result,
@@ -259,6 +267,14 @@ class ReviewPhase(Phase):
         if verdict == "request_changes":
             n_req = len(review.get("findings", []))
             self.logger.narrate(f"Review requests changes ({n_req} finding(s)). Back to implement.")
+            for i, finding in enumerate(review.get("findings", []), 1):
+                dim = finding.get("dimension", "?")
+                sev = finding.get("severity", "?")
+                desc = finding.get("description", "No description")
+                file_ref = finding.get("file", "")
+                line_ref = finding.get("line", "")
+                loc = f" [{file_ref}:{line_ref}]" if file_ref else ""
+                self.logger.narrate(f"  #{i} ({dim}/{sev}){loc}: {desc}")
             return PhaseResult(
                 phase=self.name,
                 success=False,
