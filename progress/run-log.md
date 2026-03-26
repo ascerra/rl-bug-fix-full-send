@@ -1057,3 +1057,24 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 - Meta-loop script uses `gh` CLI for all GitHub operations (trigger, monitor, download) — no custom API calls needed
 **Issues hit**: Lint error SIM102 (nested if → combined if) and E501 (line length) — restructured to single if with extracted variable
 **Next focus**: Push changes, run meta-loop.sh against a target issue, verify the review convergence improvement
+
+## Run 51 — KONFLUX-11443 Post-Mortem: Human vs Ralph Loop Fix Comparison
+
+**Date**: 2026-03-26
+**Phase**: Post-MVP — production fix quality analysis + review hardening
+**What shipped**:
+1. **Human vs Ralph Loop diagnosis** — Compared human PR #3057 (by @zxiong) against Ralph Loop runs 23615068030 and 23617134590 for KONFLUX-11443 (race condition in `fbc-fips-check-oci-ta` parallel processing). Both identified the same root cause and same fix strategy (append unique `image_num` to temp paths). Human graded A, Ralph Loop graded A-. Ralph was 60x faster (2.8min vs hours) with better documentation, but human had perfect path consistency while Ralph Loop run 23617134590 dropped `:latest` from OCI cleanup path — a subtle inconsistency the self-review failed to catch.
+2. **Review prompt: paired-operation consistency** — Added review dimension #6 "Consistency of Paired Operations" to `templates/prompts/review.md`. Instructs LLM to verify creation paths match cleanup/deletion paths exactly, including OCI tag suffixes. Added explicit callout that path mismatches are correctness issues, not style nits.
+3. **Implement prompt: convention-following + path consistency** — Added "Consistency Requirements" section to `templates/prompts/implement.md`. Instructs implementation agent to maintain exact path patterns across paired operations (create/delete), follow codebase parameter ordering conventions, and verify all call sites when function signatures change.
+4. **Deterministic path-consistency checker** — Added `_check_path_consistency()` to `engine/phases/review.py`. Post-LLM check that extracts file/dir paths from the diff using regex (handles shell variable interpolation), categorizes them by operation type (create/cleanup/reference), and detects OCI tag mismatches between paired operations. Wired into the `act()` phase — if a mismatch is found, it injects a finding and downgrades `approve` to `request_changes`. This would have caught the `:latest` drop in run 23617134590.
+**Files changed**:
+- `templates/prompts/review.md` — added dimension #6 (paired-operation consistency) + path mismatch severity callout
+- `templates/prompts/implement.md` — added consistency requirements section
+- `engine/phases/review.py` — added `_check_path_consistency()`, `_strip_oci_tag()`, `_has_oci_tag()`, `_extract_path_bases()`, wired into `act()` phase
+**Test result**: 253 core tests pass, lint clean. Pre-existing e2e failures (git remote push) unrelated.
+**Decisions made**:
+- Deterministic check runs *after* LLM review — it's a safety net, not a replacement for the LLM's understanding
+- Path consistency check uses regex rather than AST because the target content is shell scripts embedded in YAML
+- Only added lines from the diff are checked — we care about what the fix introduces, not pre-existing issues
+- Findings are `suggestion` severity (not `blocking`) so the implementer gets a chance to fix rather than escalating
+**Next focus**: Re-run Ralph Loop on KONFLUX-11443 with improved prompts to verify the consistency check catches the `:latest` drop

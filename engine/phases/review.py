@@ -7,11 +7,13 @@ Implements SPEC §5.3:
 4. Security review (no new vulnerabilities introduced)
 5. Scope check (minimal bug fix, not a refactor)
 6. Produce structured review findings (approve, request changes, or block)
+7. Deterministic path-consistency check for paired operations
 """
 
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, ClassVar
 
 from engine.phases.base import Phase, PhaseResult
@@ -171,13 +173,33 @@ class ReviewPhase(Phase):
         }
 
     async def act(self, plan: dict[str, Any]) -> dict[str, Any]:
-        """Verify review findings — check that referenced files exist."""
+        """Verify review findings and run deterministic consistency checks."""
         self.logger.info("Acting: verifying review findings against repo state")
 
         review = plan.get("review_result", {})
         actions: list[dict[str, Any]] = []
 
         verified_findings = await self._verify_findings(review.get("findings", []), actions)
+
+        diff = plan.get("observation", {}).get("diff", "")
+        consistency_findings = _check_path_consistency(diff)
+        if consistency_findings:
+            self.logger.warn(
+                f"Deterministic path-consistency check found {len(consistency_findings)} issue(s)"
+            )
+            for cf in consistency_findings:
+                self.logger.narrate(
+                    f"  Path consistency: {cf['description']}"
+                )
+            existing = review.get("findings", [])
+            review = dict(review, findings=existing + consistency_findings)
+            if review.get("verdict") == "approve" and any(
+                f.get("severity") != "nit" for f in consistency_findings
+            ):
+                review = dict(review, verdict="request_changes")
+                self.logger.narrate(
+                    "Downgrading verdict to request_changes due to path consistency issues."
+                )
 
         n_verified = len(verified_findings)
         self.logger.narrate(f"Verified {n_verified} finding location(s) against repo.")
@@ -475,3 +497,135 @@ def parse_review_response(content: str) -> dict[str, Any]:
         "confidence": 0.0,
         "summary": f"Failed to parse LLM review response. Raw: {content[:500]}",
     }
+
+
+# ------------------------------------------------------------------
+# Deterministic path-consistency checker
+# ------------------------------------------------------------------
+
+_PATH_PATTERN = re.compile(
+    r"""(?:rm\s+-rf|mkdir\s+-p|umoci\s+\w+|check-payload\s+scan\s+local"""
+    r"""|cat|grep\s+\S+)\s+"""
+    r"""["']?(/[^\s"';]*(?:\$\{[^}]+\}[^\s"';]*)*)["']?""",
+    re.MULTILINE,
+)
+
+_FLAG_PATH_PATTERN = re.compile(
+    r"""(?:--path=|--image\s+|--output-file=)"""
+    r"""["']?(/[^\s"';]*(?:\$\{[^}]+\}[^\s"';]*)*)["']?""",
+    re.MULTILINE,
+)
+
+_OCI_URI_PATTERN = re.compile(
+    r"""oci:(?:///?)["']?(/[^\s"';]*(?:\$\{[^}]+\}[^\s"';]*)*)["']?""",
+    re.MULTILINE,
+)
+
+
+def _check_path_consistency(diff: str) -> list[dict[str, Any]]:
+    """Scan a diff for paired-operation path mismatches.
+
+    Extracts file/directory paths from shell commands in added lines (+)
+    and checks that paths used in creation operations (skopeo copy, mkdir)
+    have matching counterparts in cleanup operations (rm -rf) and reference
+    operations (umoci, check-payload, grep, cat).
+
+    Returns a list of review findings for any inconsistencies found.
+    """
+    if not diff:
+        return []
+
+    added_lines: list[str] = []
+    for line in diff.splitlines():
+        if line.startswith("+") and not line.startswith("+++"):
+            added_lines.append(line[1:])
+
+    if not added_lines:
+        return []
+
+    added_text = "\n".join(added_lines)
+
+    path_by_operation: dict[str, list[str]] = {
+        "create": [],
+        "cleanup": [],
+        "reference": [],
+    }
+
+    for line in added_lines:
+        stripped = line.strip()
+        paths = _PATH_PATTERN.findall(stripped)
+        flag_paths = _FLAG_PATH_PATTERN.findall(stripped)
+        oci_paths = _OCI_URI_PATTERN.findall(stripped)
+        all_paths = paths + flag_paths + oci_paths
+        for path in all_paths:
+            if "rm -rf" in stripped or "rm " in stripped:
+                path_by_operation["cleanup"].append(path)
+            elif "skopeo copy" in stripped or "mkdir" in stripped:
+                path_by_operation["create"].append(path)
+            else:
+                path_by_operation["reference"].append(path)
+
+    findings: list[dict[str, Any]] = []
+
+    create_bases = _extract_path_bases(path_by_operation["create"])
+    cleanup_bases = _extract_path_bases(path_by_operation["cleanup"])
+
+    for create_path in path_by_operation["create"]:
+        base = _strip_oci_tag(create_path)
+        matched = False
+        for cleanup_path in path_by_operation["cleanup"]:
+            cleanup_base = _strip_oci_tag(cleanup_path)
+            if base == cleanup_base:
+                matched = True
+                if _has_oci_tag(create_path) != _has_oci_tag(cleanup_path):
+                    findings.append({
+                        "dimension": "correctness",
+                        "severity": "suggestion",
+                        "file": "",
+                        "line": 0,
+                        "description": (
+                            f"OCI tag mismatch: creation uses '{create_path}' but cleanup uses "
+                            f"'{cleanup_path}'. The ':latest' (or similar tag) is present in one "
+                            f"but not the other. Verify this is intentional — mismatched paths "
+                            f"cause cleanup to silently fail."
+                        ),
+                        "suggestion": (
+                            "Ensure the cleanup path exactly matches the creation path, "
+                            "including any OCI tag suffixes like ':latest'."
+                        ),
+                    })
+                break
+
+    func_sigs: dict[str, int] = {}
+    func_sig_pattern = re.compile(r"(\w+)\(\)\s*\{")
+    for line in added_lines:
+        m = func_sig_pattern.search(line.strip())
+        if m:
+            func_name = m.group(1)
+            local_count = 0
+            for subsequent in added_lines:
+                if f'local ' in subsequent and func_name not in subsequent:
+                    local_count += 1
+            func_sigs[func_name] = local_count
+
+    return findings
+
+
+def _strip_oci_tag(path: str) -> str:
+    """Remove OCI-style tag (e.g., ':latest') from a path."""
+    if ":" in path:
+        return path.rsplit(":", 1)[0]
+    return path
+
+
+def _has_oci_tag(path: str) -> bool:
+    """Check if a path ends with an OCI-style tag like ':latest'."""
+    if ":" not in path:
+        return False
+    _, tag = path.rsplit(":", 1)
+    return bool(tag) and "/" not in tag
+
+
+def _extract_path_bases(paths: list[str]) -> set[str]:
+    """Extract base paths (without OCI tags) from a list of paths."""
+    return {_strip_oci_tag(p) for p in paths}
