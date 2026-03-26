@@ -49,7 +49,8 @@ rl-bug-fix-full-send/
 │   │   ├── triage.py         # Triage phase (classify, verify, reproduce)
 │   │   ├── implement.py      # Implementation phase (fix, test, lint)
 │   │   ├── review.py         # Review phase (correctness, intent, security, scope)
-│   │   └── validate.py       # Validation phase (test, lint, minimal diff, PR)
+│   │   ├── validate.py       # Validation phase (test, lint, minimal diff, PR)
+│   │   └── report.py         # Report phase (visual evidence generation)
 │   ├── secrets.py            # Secret management and redaction
 │   ├── golden_principles.py  # SPEC §7 enforcement (AST-based linter)
 │   ├── quality_scanner.py    # Background quality scanner (periodic scans)
@@ -195,6 +196,7 @@ xdg-open progress/index.html  # Linux
 **Phase 4: Integration Layer** — Complete (all sub-phases 4.1–4.4 done)
 **Phase 5: Hardening and Testing** — Complete (all sub-phases 5.1–5.4 done)
 **Phase 6: Self-Improvement Infrastructure** — Complete (all sub-phases 6.1–6.3 done)
+**Phase 7: Production Observability & Feedback Loops** — Complete (16 deficiencies cataloged from 4 production runs, all resolved)
 
 | Component | Status | Module |
 |-----------|--------|--------|
@@ -203,13 +205,14 @@ xdg-open progress/index.html  # Linux
 | Structured logging & tracing | ✅ | `engine/observability/` |
 | Configuration system | ✅ | `engine/config.py` — includes per-phase config (`PhasesConfig`) |
 | Tool executor | ✅ | `engine/tools/executor.py` |
-| Loop orchestrator | ✅ | `engine/loop.py` — phase registry, dispatch, transitions, escalation |
+| Loop orchestrator | ✅ | `engine/loop.py` — phase registry, dispatch, transitions, escalation, exponential retry backoff |
 | Phase framework | ✅ | `engine/phases/base.py`, `engine/phases/prompt_loader.py` — prompt loading, tool sets, config wiring |
-| Triage phase | ✅ | `engine/phases/triage.py` — classify, verify components, attempt reproduction |
-| Implementation phase | ✅ | `engine/phases/implement.py` — analyze code, generate fix, inner iteration loop, test/lint |
+| Triage phase | ✅ | `engine/phases/triage.py` — classify, verify components, attempt reproduction, issue fetch with GitHub API fallback |
+| Implementation phase | ✅ | `engine/phases/implement.py` — analyze code, generate fix, inner iteration loop, test/lint, retry adaptation, LLM parse retry with validation |
 | Review phase | ✅ | `engine/phases/review.py` — independent review: correctness, intent, security, scope |
 | Validation phase | ✅ | `engine/phases/validate.py` — full test suite, CI checks, minimal diff, PR creation |
-| GH Actions workflow | ✅ | `.github/workflows/ralph-loop.yml` — workflow_dispatch, config overrides, artifact upload |
+| Report phase | ✅ | `engine/phases/report.py` — visual evidence generation via ReportPublisher, non-blocking (always succeeds) |
+| GH Actions workflow | ✅ | `.github/workflows/ralph-loop.yml` — workflow_dispatch, config overrides, full artifact upload (execution.json, log.json, progress.md, reports/, transcripts/, status.txt) |
 | Self-monitoring | ✅ | `engine/workflow/monitor.py` — CI health checks, step failure detection, workflow context |
 | Secret management | ✅ | `engine/secrets.py` — `SecretManager` + `SecretRedactor`, env var validation, redaction in logs/traces/tools |
 | Fork & rollback script | ✅ | `scripts/setup-fork.sh` — fork repo, rollback to pre-fix commit, JSON summary output |
@@ -231,9 +234,10 @@ xdg-open progress/index.html  # Linux
 | Security audit | ✅ | `tests/test_security_audit.py` — 59 tests: commit signing verification, provenance recording (all phases), secrets never in logs/artifacts, untrusted content separation in all LLM calls, cross-cutting security properties |
 | Golden principles enforcement | ✅ | `engine/golden_principles.py` — AST-based static analyzer: P1 logging, P3 untrusted separation, P5 iteration bounds, P8 provenance, P9 report publishing, P10 config usage. `make principles` CI gate |
 | Deterministic tool extraction | ✅ | `engine/tools/extraction.py` — `PatternDetector` + `ProposalGenerator`: scans execution records for repeated LLM patterns, proposes deterministic replacements (5 categories + caching fallback). CLI: `python -m engine.tools.extraction` |
+| Test runner detection | ✅ | `engine/tools/test_runner.py` — `detect_repo_stack()`: detects target repo language from manifests (go.mod, package.json, Cargo.toml, pyproject.toml) and file extensions, returns language-specific test/lint commands. Configurable via `test_command`/`lint_command` overrides in `.rl-config.yaml` |
 | Background quality scanner | ✅ | `engine/quality_scanner.py` — `BackgroundQualityScanner`: periodic scans combining golden principles, extraction proposals, code metrics. Auto-generates refactoring PR bodies. Weekly cron workflow. CLI: `python -m engine.quality_scanner` |
 
-**1535 tests passing**, lint clean, golden principles PASS.
+**1887 tests passing**, lint clean, golden principles PASS. **16 production deficiencies** identified and cataloged in Phase 7 — all resolved (2 critical, 6 high, 4 medium, 4 low).
 
 ### Cross-Fork PR Workflow
 
@@ -243,9 +247,12 @@ The engine supports the standard open-source contribution model: fork the target
 
 Every execution produces full traceability regardless of where the engine succeeds or fails:
 
-- **Iteration trace in summary.md** — each phase iteration is logged with duration, pass/fail status, escalation reasons (with LLM reasoning), and key findings
+- **Live narration** — human-readable `>>> [PHASE] message` lines printed to stderr during execution, visible in real-time in GitHub Actions logs. Each OODA step in every phase emits a 1–2 sentence summary explaining what the engine is doing (e.g., `>>> [TRIAGE] Classified as bug (confidence: 0.85, severity: high).`)
+- **Running progress.md** — a markdown file continuously appended during execution with per-iteration headings and bullet-point narrations, uploaded as an artifact for post-hoc review
+- **Iteration trace in summary.md** — each phase iteration is logged with duration, pass/fail status, escalation reasons (with LLM reasoning), and key findings rendered as human-readable bullet points (dicts as `key: value`, lists as comma-separated items — no raw JSON)
 - **Crash context capture** — if a phase crashes mid-cycle, the execution record includes which OODA step failed (observe/plan/act/validate/reflect), what partial context was gathered before the crash, and the traceback
 - **Findings and artifacts in execution.json** — each iteration now records the phase's `findings` and `artifacts` dicts (truncated to prevent bloat) so you can see what the LLM returned, what components were identified, what files were read
+- **Plain-English narrative** — `report.html` and `summary.md` both open with a deterministic narrative paragraph summarising what happened: issue processed, triage classification, implementation attempts, review verdict, and final status — no LLM call required
 - **GitHub Actions step summary** — `summary.md` is piped to `$GITHUB_STEP_SUMMARY` so traceability is visible directly in the workflow run without downloading artifacts
 
 ## Design Principles

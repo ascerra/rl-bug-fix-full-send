@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from engine.config import EngineConfig
 from engine.integrations.llm import LLMProvider
 from engine.observability.logger import StructuredLogger
-from engine.observability.tracer import Tracer
+from engine.observability.metrics import LoopMetrics
+from engine.observability.tracer import ActionRecord, Tracer
 from engine.phases.prompt_loader import load_prompt
 
 if TYPE_CHECKING:
@@ -83,6 +84,7 @@ class Phase(ABC):
         prior_phase_results: list[PhaseResult] | None = None,
         tool_executor: ToolExecutor | None = None,
         config: EngineConfig | None = None,
+        metrics: LoopMetrics | None = None,
     ):
         self.llm = llm
         self.logger = logger
@@ -92,6 +94,7 @@ class Phase(ABC):
         self.prior_results = prior_phase_results or []
         self.tool_executor = tool_executor
         self.config = config or EngineConfig()
+        self.metrics = metrics
 
     @classmethod
     def get_allowed_tools(cls) -> list[str]:
@@ -115,6 +118,36 @@ class Phase(ABC):
         ``variables`` are provided.
         """
         return load_prompt(self.name, variables=variables, templates_dir=templates_dir)
+
+    def record_llm_call(
+        self,
+        description: str,
+        model: str,
+        provider: str,
+        tokens_in: int,
+        tokens_out: int,
+        latency_ms: float,
+        prompt_summary: str = "",
+        response_summary: str = "",
+    ) -> ActionRecord:
+        """Record an LLM call in both the tracer (action log) and metrics (counters).
+
+        All phases should call this instead of ``self.tracer.record_llm_call()``
+        directly so that ``LoopMetrics`` token/call counters stay in sync with
+        the action trace.
+        """
+        if self.metrics is not None:
+            self.metrics.record_llm_call(tokens_in=tokens_in, tokens_out=tokens_out)
+        return self.tracer.record_llm_call(
+            description=description,
+            model=model,
+            provider=provider,
+            tokens_in=tokens_in,
+            tokens_out=tokens_out,
+            latency_ms=latency_ms,
+            prompt_summary=prompt_summary,
+            response_summary=response_summary,
+        )
 
     @abstractmethod
     async def observe(self) -> dict[str, Any]:
@@ -152,24 +185,35 @@ class Phase(ABC):
         try:
             step = "observe"
             observation = await self.observe()
-            partial_context["observation_keys"] = list(observation.keys()) if isinstance(observation, dict) else str(type(observation))
+            partial_context["observation_keys"] = (
+                list(observation.keys())
+                if isinstance(observation, dict)
+                else str(type(observation))
+            )
 
             step = "plan"
             plan = await self.plan(observation)
-            partial_context["plan_keys"] = list(plan.keys()) if isinstance(plan, dict) else str(type(plan))
+            partial_context["plan_keys"] = (
+                list(plan.keys()) if isinstance(plan, dict) else str(type(plan))
+            )
 
             step = "act"
             result = await self.act(plan)
-            partial_context["act_keys"] = list(result.keys()) if isinstance(result, dict) else str(type(result))
+            partial_context["act_keys"] = (
+                list(result.keys()) if isinstance(result, dict) else str(type(result))
+            )
 
             step = "validate"
             validation = await self.validate(result)
-            partial_context["validate_keys"] = list(validation.keys()) if isinstance(validation, dict) else str(type(validation))
+            partial_context["validate_keys"] = (
+                list(validation.keys()) if isinstance(validation, dict) else str(type(validation))
+            )
 
             step = "reflect"
             phase_result = await self.reflect(validation)
         except Exception as e:
             import traceback
+
             tb_str = traceback.format_exc()
             self.logger.error(f"Phase {self.name} failed at step '{step}': {e}")
             phase_result = PhaseResult(

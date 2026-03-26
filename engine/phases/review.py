@@ -51,6 +51,10 @@ class ReviewPhase(Phase):
                 if result.get("success"):
                     file_contents[path] = result.get("content", "")
 
+        n_files = len(files_changed)
+        diff_len = len(diff)
+        self.logger.narrate(f"Reviewing {n_files} changed file(s). Diff length: {diff_len} chars.")
+
         return {
             "issue": dict(self.issue_data),
             "diff": diff,
@@ -106,7 +110,7 @@ class ReviewPhase(Phase):
             max_tokens=self.config.llm.max_tokens,
         )
 
-        self.tracer.record_llm_call(
+        self.record_llm_call(
             description="Review code assessment",
             model=llm_response.model,
             provider=llm_response.provider,
@@ -118,6 +122,16 @@ class ReviewPhase(Phase):
         )
 
         review_result = parse_review_response(llm_response.content)
+
+        verdict = review_result.get("verdict", "unknown")
+        n_findings = len(review_result.get("findings", []))
+        confidence = review_result.get("confidence", 0)
+        conf_str = (
+            f"{float(confidence):.2f}" if isinstance(confidence, (int, float)) else str(confidence)
+        )
+        self.logger.narrate(
+            f"Review verdict: {verdict}. {n_findings} finding(s). Confidence: {conf_str}."
+        )
 
         return {
             "review_result": review_result,
@@ -133,6 +147,9 @@ class ReviewPhase(Phase):
         actions: list[dict[str, Any]] = []
 
         verified_findings = await self._verify_findings(review.get("findings", []), actions)
+
+        n_verified = len(verified_findings)
+        self.logger.narrate(f"Verified {n_verified} finding location(s) against repo.")
 
         return {
             "review_result": review,
@@ -179,24 +196,33 @@ class ReviewPhase(Phase):
         }
 
     async def reflect(self, validation: dict[str, Any]) -> PhaseResult:
-        """Decide next step: approve → validate, request_changes → implement, block → escalate."""
+        """Decide next step: approve → validate, request_changes → implement, block → escalate.
+
+        Block verdicts are programmatically downgraded to ``request_changes``
+        unless the review detected prompt injection or contains a finding with
+        ``severity: blocking`` AND ``dimension: security``.  This prevents
+        quality-only issues from killing the loop — the implementer gets
+        actionable feedback instead.
+        """
         self.logger.info("Reflecting: deciding review outcome")
 
         review = validation.get("review_result", {})
         verdict = validation.get("verdict", "")
 
         if validation.get("injection_detected", False):
+            self.logger.narrate("ALERT: Prompt injection detected in code/issue. Escalating.")
             return PhaseResult(
                 phase=self.name,
                 success=False,
                 should_continue=False,
                 escalate=True,
-                escalation_reason=("Prompt injection detected in code diff or issue during review"),
+                escalation_reason="Prompt injection detected in code diff or issue during review",
                 findings=review,
             )
 
         if not validation.get("valid", False):
             self.logger.warn(f"Review validation issues: {validation.get('issues', [])}")
+            self.logger.narrate("Review validation issues. Retrying.")
             return PhaseResult(
                 phase=self.name,
                 success=False,
@@ -204,7 +230,17 @@ class ReviewPhase(Phase):
                 findings={"validation_issues": validation["issues"], "review": review},
             )
 
+        if verdict == "block" and not self._has_security_block(review):
+            self.logger.warn(
+                "Downgrading 'block' verdict to 'request_changes' — "
+                "no injection detected and no security-blocking finding"
+            )
+            verdict = "request_changes"
+            review = dict(review, verdict="request_changes")
+            self.logger.narrate("Block verdict downgraded to request_changes (no security threat).")
+
         if verdict == "approve":
+            self.logger.narrate("Review approved. Moving to validate.")
             return PhaseResult(
                 phase=self.name,
                 success=True,
@@ -218,6 +254,8 @@ class ReviewPhase(Phase):
             )
 
         if verdict == "request_changes":
+            n_req = len(review.get("findings", []))
+            self.logger.narrate(f"Review requests changes ({n_req} finding(s)). Back to implement.")
             return PhaseResult(
                 phase=self.name,
                 success=False,
@@ -230,7 +268,8 @@ class ReviewPhase(Phase):
                 },
             )
 
-        # verdict == "block"
+        # verdict == "block" with a genuine security/injection reason
+        self.logger.narrate("Review blocked: security threat. Escalating.")
         return PhaseResult(
             phase=self.name,
             success=False,
@@ -245,6 +284,20 @@ class ReviewPhase(Phase):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _has_security_block(review: dict[str, Any]) -> bool:
+        """Return True if the review contains a finding with both
+        ``severity: blocking`` AND ``dimension: security``.
+
+        This is the gate that decides whether a ``block`` verdict is
+        legitimate (real security threat) or should be downgraded to
+        ``request_changes`` (quality issue the implementer can fix).
+        """
+        for finding in review.get("findings", []):
+            if finding.get("severity") == "blocking" and finding.get("dimension") == "security":
+                return True
+        return False
 
     def _extract_impl_artifacts(self) -> dict[str, Any]:
         """Extract the implementation artifacts from prior phase results."""

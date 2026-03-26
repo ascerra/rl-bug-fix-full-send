@@ -16,6 +16,7 @@ import os
 from typing import Any, ClassVar
 
 from engine.phases.base import Phase, PhaseResult
+from engine.tools.test_runner import RepoStack, detect_repo_stack
 
 
 class ValidatePhase(Phase):
@@ -29,6 +30,10 @@ class ValidatePhase(Phase):
 
     name = "validate"
     allowed_tools: ClassVar[list[str]] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._detected_stack: RepoStack | None = None
 
     async def observe(self) -> dict[str, Any]:
         """Gather the review report, implementation diff, and re-read the issue."""
@@ -53,6 +58,40 @@ class ValidatePhase(Phase):
                 result = await self.tool_executor.execute("file_read", path=path)
                 if result.get("success"):
                     file_contents[path] = result.get("content", "")
+
+        repo_listing = ""
+        if self.tool_executor:
+            tree_result = await self.tool_executor.execute(
+                "shell_run",
+                command=(
+                    "find . -type f "
+                    "\\( -name '*.py' -o -name '*.go' -o -name '*.js' -o -name '*.ts' "
+                    "-o -name '*.yaml' -o -name '*.yml' -o -name '*.rs' "
+                    "-o -name 'go.mod' -o -name 'Cargo.toml' -o -name 'package.json' "
+                    "-o -name 'pyproject.toml' -o -name 'Makefile' \\) "
+                    "| grep -v node_modules | grep -v __pycache__ | sort | head -100"
+                ),
+            )
+            if tree_result.get("success"):
+                repo_listing = tree_result.get("stdout", "")
+
+        self._detected_stack = detect_repo_stack(
+            repo_listing,
+            test_command_override=self.config.phases.validate.test_command,
+            lint_command_override=self.config.phases.validate.lint_command,
+        )
+        self.logger.info(
+            f"Detected repo stack: {self._detected_stack.language} "
+            f"(from {self._detected_stack.detected_from}, "
+            f"confidence={self._detected_stack.confidence:.2f})"
+        )
+
+        n_files = len(files_changed)
+        has_review = bool(review_report)
+        self.logger.narrate(
+            f"Gathered {n_files} changed file(s) and "
+            f"{'review report' if has_review else 'no review report'}."
+        )
 
         return {
             "issue": dict(self.issue_data),
@@ -112,7 +151,7 @@ class ValidatePhase(Phase):
             max_tokens=self.config.llm.max_tokens,
         )
 
-        self.tracer.record_llm_call(
+        self.record_llm_call(
             description="Validation assessment and PR description generation",
             model=llm_response.model,
             provider=llm_response.provider,
@@ -124,6 +163,14 @@ class ValidatePhase(Phase):
         )
 
         validate_result = parse_validate_response(llm_response.content)
+
+        t_pass = "PASS" if test_result.get("passed") else "FAIL"
+        l_pass = "PASS" if lint_result.get("passed") else "FAIL"
+        ready = validate_result.get("ready_to_submit", False)
+        self.logger.narrate(
+            f"Independent checks — tests: {t_pass}, lint: {l_pass}. "
+            f"Ready to submit: {'yes' if ready else 'no'}."
+        )
 
         return {
             "validate_result": validate_result,
@@ -154,6 +201,20 @@ class ValidatePhase(Phase):
             pr_result = await self._create_pr(validate_result, observation, actions)
             pr_created = pr_result.get("created", False)
             pr_url = pr_result.get("url", "")
+
+        if pr_created:
+            self.logger.narrate(f"PR created: {pr_url}")
+        elif ready and tests_ok and lint_ok:
+            self.logger.narrate("PR creation skipped (no tool executor).")
+        else:
+            blocking = []
+            if not tests_ok:
+                blocking.append("tests failing")
+            if not lint_ok:
+                blocking.append("lint failing")
+            if not ready:
+                blocking.append("not ready")
+            self.logger.narrate(f"PR not created: {', '.join(blocking)}.")
 
         return {
             "validate_result": validate_result,
@@ -190,6 +251,11 @@ class ValidatePhase(Phase):
         if blocking:
             issues.extend(f"Blocking: {b}" for b in blocking[:5])
 
+        if len(issues) == 0:
+            self.logger.narrate("All validation checks passed.")
+        else:
+            self.logger.narrate(f"Validation found {len(issues)} issue(s).")
+
         return {
             "valid": len(issues) == 0,
             "issues": issues,
@@ -209,6 +275,8 @@ class ValidatePhase(Phase):
         validate_result = validation.get("validate_result", {})
 
         if validation.get("valid"):
+            pr_status = "created" if validation.get("pr_created") else "pending"
+            self.logger.narrate(f"Validation passed. PR {pr_status}. Moving to report.")
             return PhaseResult(
                 phase=self.name,
                 success=True,
@@ -232,6 +300,7 @@ class ValidatePhase(Phase):
         linters_passing = validation.get("linters_passing", False)
 
         if not tests_passing or not linters_passing:
+            self.logger.narrate("Tests or lint failing. Back to implement.")
             return PhaseResult(
                 phase=self.name,
                 success=False,
@@ -247,6 +316,7 @@ class ValidatePhase(Phase):
                 },
             )
 
+        self.logger.narrate("Validation incomplete. Retrying.")
         return PhaseResult(
             phase=self.name,
             success=False,
@@ -281,38 +351,32 @@ class ValidatePhase(Phase):
         return {}
 
     async def _run_full_tests(self) -> dict[str, Any]:
-        """Run the full test suite independently."""
+        """Run the full test suite using the detected repo stack's test command."""
         if not self.config.phases.validate.full_test_suite or not self.tool_executor:
             return {"passed": True, "output": "Tests skipped by config"}
 
-        result = await self.tool_executor.execute(
-            "shell_run",
-            command=(
-                "python -m pytest --tb=short -q 2>&1 "
-                "|| go test ./... 2>&1 "
-                "|| npm test 2>&1 "
-                "|| echo 'No test runner detected'"
-            ),
-            timeout=120,
+        cmd = (
+            self._detected_stack.test_command
+            if self._detected_stack
+            else "echo 'No test runner detected'"
         )
+
+        result = await self.tool_executor.execute("shell_run", command=cmd, timeout=120)
         output = result.get("stdout", "") + result.get("stderr", "")
         return {"passed": result.get("success", False), "output": output[:3000]}
 
     async def _run_linters(self) -> dict[str, Any]:
-        """Run linters independently."""
+        """Run linters using the detected repo stack's lint command."""
         if not self.config.phases.validate.ci_equivalent or not self.tool_executor:
             return {"passed": True, "output": "Linters skipped by config"}
 
-        result = await self.tool_executor.execute(
-            "shell_run",
-            command=(
-                "ruff check . 2>&1 "
-                "|| golangci-lint run ./... 2>&1 "
-                "|| npx eslint . 2>&1 "
-                "|| echo 'No linter detected'"
-            ),
-            timeout=60,
+        cmd = (
+            self._detected_stack.lint_command
+            if self._detected_stack
+            else "echo 'No linter detected'"
         )
+
+        result = await self.tool_executor.execute("shell_run", command=cmd, timeout=60)
         output = result.get("stdout", "") + result.get("stderr", "")
         return {"passed": result.get("success", False), "output": output[:3000]}
 
@@ -342,23 +406,31 @@ class ValidatePhase(Phase):
             return {"created": False, "url": "", "error": "Could not determine repo endpoint"}
 
         checkout_result = await self.tool_executor.execute(
-            "shell_run", command=f"git checkout -b {branch_name}", timeout=30,
+            "shell_run",
+            command=f"git checkout -b {branch_name}",
+            timeout=30,
         )
-        actions.append({
-            "action": "git_checkout_branch",
-            "success": checkout_result.get("success", False),
-            "branch": branch_name,
-        })
+        actions.append(
+            {
+                "action": "git_checkout_branch",
+                "success": checkout_result.get("success", False),
+                "branch": branch_name,
+            }
+        )
 
         push_result = await self.tool_executor.execute(
-            "shell_run", command=f"git push origin {branch_name}", timeout=60,
+            "shell_run",
+            command=f"git push origin {branch_name}",
+            timeout=60,
         )
         push_ok = push_result.get("success", False)
-        actions.append({
-            "action": "git_push",
-            "success": push_ok,
-            "output": (push_result.get("stdout", "") + push_result.get("stderr", ""))[:500],
-        })
+        actions.append(
+            {
+                "action": "git_push",
+                "success": push_ok,
+                "output": (push_result.get("stdout", "") + push_result.get("stderr", ""))[:500],
+            }
+        )
 
         if not push_ok:
             return {

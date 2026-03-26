@@ -219,26 +219,41 @@ def _make_validate_with_repo(
     bare = tmp_path / "bare.git"
     subprocess.run(["git", "init", "--bare", str(bare)], check=True, capture_output=True)
     subprocess.run(
-        ["git", "init", "-b", "main"], cwd=str(repo), check=True, capture_output=True,
+        ["git", "init", "-b", "main"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
-        ["git", "config", "user.email", "test@test.com"], cwd=str(repo),
-        check=True, capture_output=True,
+        ["git", "config", "user.email", "test@test.com"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
-        ["git", "config", "user.name", "Test"], cwd=str(repo),
-        check=True, capture_output=True,
+        ["git", "config", "user.name", "Test"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
     )
     subprocess.run(["git", "add", "."], cwd=str(repo), check=True, capture_output=True)
     subprocess.run(
-        ["git", "commit", "-m", "init"], cwd=str(repo), check=True, capture_output=True,
+        ["git", "commit", "-m", "init"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
-        ["git", "remote", "add", "origin", str(bare)], cwd=str(repo),
-        check=True, capture_output=True,
+        ["git", "remote", "add", "origin", str(bare)],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
     )
     subprocess.run(
-        ["git", "push", "origin", "main"], cwd=str(repo), check=True, capture_output=True,
+        ["git", "push", "origin", "main"],
+        cwd=str(repo),
+        check=True,
+        capture_output=True,
     )
 
     tracer = Tracer()

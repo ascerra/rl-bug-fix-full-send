@@ -14,7 +14,16 @@ from engine.observability.logger import StructuredLogger
 from engine.observability.metrics import LoopMetrics
 from engine.observability.tracer import Tracer
 from engine.phases.base import PhaseResult
-from engine.phases.implement import ImplementPhase, parse_implement_response
+from engine.phases.implement import (
+    ImplementPhase,
+    _collect_previously_tried_files,
+    _extract_keywords,
+    _format_retry_context,
+    _format_review_feedback,
+    is_parse_failure,
+    parse_implement_response,
+    validate_impl_plan,
+)
 from engine.tools.executor import ToolExecutor
 
 # ------------------------------------------------------------------
@@ -660,6 +669,342 @@ class TestTriageExtraction:
 
 
 # ------------------------------------------------------------------
+# Review feedback extraction tests
+# ------------------------------------------------------------------
+
+
+def _review_phase_result(
+    verdict: str = "request_changes",
+    findings: list[dict[str, Any]] | None = None,
+    summary: str = "Fix has a correctness issue.",
+) -> PhaseResult:
+    """Create a mock review PhaseResult with request_changes verdict."""
+    review_data = {
+        "verdict": verdict,
+        "findings": findings
+        or [
+            {
+                "dimension": "correctness",
+                "severity": "blocking",
+                "file": "pkg/controller/reconciler.go",
+                "line": 22,
+                "description": "The nil check is in the wrong location",
+                "suggestion": "Move the nil check before the dereference on line 22",
+            }
+        ],
+        "scope_assessment": "bug_fix",
+        "injection_detected": False,
+        "confidence": 0.8,
+        "summary": summary,
+    }
+    return PhaseResult(
+        phase="review",
+        success=False,
+        should_continue=True,
+        next_phase="implement",
+        findings=review_data,
+        artifacts={"review_report": review_data},
+    )
+
+
+class TestReviewFeedbackExtraction:
+    def test_extract_from_artifacts(self):
+        phase = _make_implement(prior_results=[_triage_phase_result(), _review_phase_result()])
+        fb = phase._extract_review_feedback()
+        assert fb["verdict"] == "request_changes"
+        assert len(fb["findings"]) == 1
+        assert fb["summary"] == "Fix has a correctness issue."
+
+    def test_extract_from_findings_fallback(self):
+        result = PhaseResult(
+            phase="review",
+            success=False,
+            findings={
+                "verdict": "request_changes",
+                "findings": [{"dimension": "style", "severity": "nit"}],
+                "summary": "Style issues",
+            },
+        )
+        phase = _make_implement(prior_results=[_triage_phase_result(), result])
+        fb = phase._extract_review_feedback()
+        assert fb["verdict"] == "request_changes"
+        assert len(fb["findings"]) == 1
+
+    def test_extract_empty_when_no_review(self):
+        phase = _make_implement(prior_results=[_triage_phase_result()])
+        fb = phase._extract_review_feedback()
+        assert fb == {}
+
+    def test_extract_empty_when_no_prior_results(self):
+        phase = _make_implement(prior_results=[])
+        fb = phase._extract_review_feedback()
+        assert fb == {}
+
+    def test_extract_picks_latest_review(self):
+        review1 = PhaseResult(
+            phase="review",
+            success=False,
+            findings={"verdict": "request_changes", "summary": "old", "findings": []},
+            artifacts={
+                "review_report": {
+                    "verdict": "request_changes",
+                    "summary": "old",
+                    "findings": [],
+                }
+            },
+        )
+        review2 = PhaseResult(
+            phase="review",
+            success=False,
+            findings={
+                "verdict": "request_changes",
+                "summary": "latest",
+                "findings": [],
+            },
+            artifacts={
+                "review_report": {
+                    "verdict": "request_changes",
+                    "summary": "latest",
+                    "findings": [],
+                }
+            },
+        )
+        phase = _make_implement(prior_results=[_triage_phase_result(), review1, review2])
+        fb = phase._extract_review_feedback()
+        assert fb["summary"] == "latest"
+
+    def test_extract_skips_non_review_phases(self):
+        impl_result = PhaseResult(
+            phase="implement",
+            success=True,
+            findings={"root_cause": "test"},
+            artifacts={"diff": "x"},
+        )
+        phase = _make_implement(prior_results=[_triage_phase_result(), impl_result])
+        fb = phase._extract_review_feedback()
+        assert fb == {}
+
+    def test_extract_includes_scope_assessment(self):
+        phase = _make_implement(prior_results=[_triage_phase_result(), _review_phase_result()])
+        fb = phase._extract_review_feedback()
+        assert fb["scope_assessment"] == "bug_fix"
+
+    def test_extract_skips_review_with_empty_findings_and_artifacts(self):
+        empty_review = PhaseResult(phase="review", success=False)
+        phase = _make_implement(prior_results=[_triage_phase_result(), empty_review])
+        fb = phase._extract_review_feedback()
+        assert fb == {}
+
+
+# ------------------------------------------------------------------
+# _format_review_feedback tests
+# ------------------------------------------------------------------
+
+
+class TestFormatReviewFeedback:
+    def test_basic_format(self):
+        fb = {
+            "verdict": "request_changes",
+            "summary": "Fix has issues.",
+            "findings": [],
+        }
+        text = _format_review_feedback(fb)
+        assert "PREVIOUS REVIEW FEEDBACK" in text
+        assert "request_changes" in text
+        assert "Fix has issues." in text
+
+    def test_format_with_findings(self):
+        fb = {
+            "verdict": "request_changes",
+            "summary": "Correctness issue.",
+            "findings": [
+                {
+                    "dimension": "correctness",
+                    "severity": "blocking",
+                    "file": "reconciler.go",
+                    "line": 22,
+                    "description": "Nil check in wrong location",
+                    "suggestion": "Move check before line 22",
+                }
+            ],
+        }
+        text = _format_review_feedback(fb)
+        assert "Findings (1):" in text
+        assert "[correctness/blocking]" in text
+        assert "Nil check in wrong location" in text
+        assert "Location: reconciler.go:22" in text
+        assert "Suggestion: Move check before line 22" in text
+
+    def test_format_without_location(self):
+        fb = {
+            "verdict": "request_changes",
+            "summary": "Issue.",
+            "findings": [
+                {
+                    "dimension": "style",
+                    "severity": "nit",
+                    "description": "Use consistent naming",
+                    "suggestion": "Rename variable",
+                }
+            ],
+        }
+        text = _format_review_feedback(fb)
+        assert "Location:" not in text
+        assert "Suggestion: Rename variable" in text
+
+    def test_format_multiple_findings(self):
+        fb = {
+            "verdict": "request_changes",
+            "summary": "Multiple issues.",
+            "findings": [
+                {"dimension": "correctness", "severity": "blocking", "description": "Issue A"},
+                {"dimension": "style", "severity": "nit", "description": "Issue B"},
+                {"dimension": "security", "severity": "suggestion", "description": "Issue C"},
+            ],
+        }
+        text = _format_review_feedback(fb)
+        assert "Findings (3):" in text
+        assert "1. [correctness/blocking] Issue A" in text
+        assert "2. [style/nit] Issue B" in text
+        assert "3. [security/suggestion] Issue C" in text
+
+    def test_format_empty_findings(self):
+        fb = {"verdict": "request_changes", "summary": "Minor.", "findings": []}
+        text = _format_review_feedback(fb)
+        assert "Findings" not in text
+        assert "PREVIOUS REVIEW FEEDBACK" in text
+
+    def test_format_caps_at_10_findings(self):
+        fb = {
+            "verdict": "request_changes",
+            "summary": "Many.",
+            "findings": [
+                {"dimension": "style", "severity": "nit", "description": f"Issue {i}"}
+                for i in range(15)
+            ],
+        }
+        text = _format_review_feedback(fb)
+        assert "10. " in text
+        assert "11. " not in text
+
+
+# ------------------------------------------------------------------
+# Review feedback in observe/plan tests
+# ------------------------------------------------------------------
+
+
+class TestReviewFeedbackInPipeline:
+    @pytest.mark.asyncio
+    async def test_observe_includes_review_feedback(self):
+        phase = _make_implement(
+            prior_results=[_triage_phase_result(), _review_phase_result()],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        assert "review_feedback" in obs
+        assert obs["review_feedback"]["verdict"] == "request_changes"
+        assert len(obs["review_feedback"]["findings"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_observe_empty_review_feedback_when_no_review(self):
+        phase = _make_implement(
+            prior_results=[_triage_phase_result()],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        assert obs["review_feedback"] == {}
+
+    @pytest.mark.asyncio
+    async def test_plan_includes_review_feedback_in_llm_context(self):
+        llm = MockProvider(responses=[_fix_response()])
+        phase = ImplementPhase(
+            llm=llm,
+            logger=StructuredLogger(),
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result(), _review_phase_result()],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        msg = llm.call_log[0]["messages"][0]["content"]
+        assert "PREVIOUS REVIEW FEEDBACK" in msg
+        assert "request_changes" in msg
+        assert "nil check is in the wrong location" in msg.lower()
+        assert "Move the nil check before the dereference" in msg
+
+    @pytest.mark.asyncio
+    async def test_plan_omits_review_feedback_when_no_review(self):
+        llm = MockProvider(responses=[_fix_response()])
+        phase = ImplementPhase(
+            llm=llm,
+            logger=StructuredLogger(),
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result()],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        msg = llm.call_log[0]["messages"][0]["content"]
+        assert "PREVIOUS REVIEW FEEDBACK" not in msg
+
+    @pytest.mark.asyncio
+    async def test_plan_includes_review_suggestion_in_context(self):
+        review = _review_phase_result(
+            findings=[
+                {
+                    "dimension": "correctness",
+                    "severity": "blocking",
+                    "file": "pkg/controller/reconciler.go",
+                    "line": 42,
+                    "description": "Wrong approach — this downgrades the version",
+                    "suggestion": "Keep the existing version and fix the nil check",
+                }
+            ],
+            summary="Fix uses wrong approach.",
+        )
+        llm = MockProvider(responses=[_fix_response()])
+        phase = ImplementPhase(
+            llm=llm,
+            logger=StructuredLogger(),
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result(), review],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        msg = llm.call_log[0]["messages"][0]["content"]
+        assert "Keep the existing version" in msg
+        assert "Location: pkg/controller/reconciler.go:42" in msg
+        assert "Fix uses wrong approach." in msg
+
+    @pytest.mark.asyncio
+    async def test_plan_review_feedback_is_in_trusted_context(self):
+        """Review feedback must appear in trusted context, not inside untrusted delimiters."""
+        llm = MockProvider(responses=[_fix_response()])
+        phase = ImplementPhase(
+            llm=llm,
+            logger=StructuredLogger(),
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result(), _review_phase_result()],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        msg = llm.call_log[0]["messages"][0]["content"]
+        untrusted_start = msg.index("UNTRUSTED CONTENT BELOW")
+        feedback_pos = msg.index("PREVIOUS REVIEW FEEDBACK")
+        assert feedback_pos < untrusted_start
+
+
+# ------------------------------------------------------------------
 # Integration with loop
 # ------------------------------------------------------------------
 
@@ -734,3 +1079,923 @@ class TestImplementClassProperties:
         assert cfg.phases.implement.max_inner_iterations == 5
         assert cfg.phases.implement.run_tests_after_each_edit is True
         assert cfg.phases.implement.run_linters is True
+
+
+# ------------------------------------------------------------------
+# Failed implement result helper
+# ------------------------------------------------------------------
+
+
+def _failed_implement_result(
+    approach: str = "Added nil check",
+    root_cause: str = "Nil pointer dereference",
+    files_changed: list[str] | None = None,
+    validation_issues: list[str] | None = None,
+) -> PhaseResult:
+    """Create a mock failed implement PhaseResult for retry testing."""
+    return PhaseResult(
+        phase="implement",
+        success=False,
+        should_continue=True,
+        findings={
+            "validation_issues": validation_issues or ["No files were modified"],
+            "impl_plan": {
+                "root_cause": root_cause,
+                "fix_description": approach,
+                "files_changed": files_changed or [],
+                "file_changes": [],
+            },
+        },
+        artifacts={
+            "files_changed": files_changed or [],
+        },
+    )
+
+
+# ------------------------------------------------------------------
+# _extract_keywords tests
+# ------------------------------------------------------------------
+
+
+class TestExtractKeywords:
+    def test_basic_title_keywords(self):
+        kws = _extract_keywords("nil pointer panic in reconciler", "", min_len=4)
+        assert "pointer" in kws
+        assert "panic" in kws
+        assert "reconciler" in kws
+
+    def test_filters_short_words(self):
+        kws = _extract_keywords("a bug in the controller", "", min_len=5)
+        assert "controller" in kws
+        assert "bug" not in kws
+        assert "the" not in kws
+        assert "in" not in kws
+
+    def test_filters_stopwords(self):
+        kws = _extract_keywords("error when running between phases", "", min_len=4)
+        lower_kws = [k.lower() for k in kws]
+        assert "when" not in lower_kws
+        assert "between" not in lower_kws
+        assert "running" in lower_kws
+        assert "phases" in lower_kws
+
+    def test_filters_na(self):
+        kws = _extract_keywords("N/A", "N/A content here", min_len=3)
+        lower_kws = [k.lower() for k in kws]
+        assert "n/a" not in lower_kws
+
+    def test_deduplicates(self):
+        kws = _extract_keywords("reconciler reconciler Reconciler", "", min_len=4)
+        assert len([k for k in kws if k.lower() == "reconciler"]) == 1
+
+    def test_max_keywords_limit(self):
+        title = " ".join(f"keyword{i}" for i in range(20))
+        kws = _extract_keywords(title, "", min_len=4, max_keywords=5)
+        assert len(kws) == 5
+
+    def test_falls_back_to_body(self):
+        kws = _extract_keywords("bug", "The fbc-fips-check-oci component crashes", min_len=4)
+        lower_kws = [k.lower() for k in kws]
+        found = (
+            "fbc-fips-check-oci" in lower_kws or "component" in lower_kws or "crashes" in lower_kws
+        )
+        assert found
+
+    def test_empty_inputs(self):
+        kws = _extract_keywords("", "", min_len=4)
+        assert kws == []
+
+    def test_strips_punctuation(self):
+        kws = _extract_keywords('"reconciler" (panics!)', "", min_len=4)
+        assert "reconciler" in kws
+        assert "panics" in kws
+
+
+# ------------------------------------------------------------------
+# _collect_previously_tried_files tests
+# ------------------------------------------------------------------
+
+
+class TestCollectPreviouslyTriedFiles:
+    def test_empty_context(self):
+        assert _collect_previously_tried_files([]) == set()
+
+    def test_collects_files(self):
+        ctx = [
+            {"attempt": 1, "files_attempted": ["a.go", "b.go"]},
+            {"attempt": 2, "files_attempted": ["c.go"]},
+        ]
+        result = _collect_previously_tried_files(ctx)
+        assert result == {"a.go", "b.go", "c.go"}
+
+    def test_deduplicates(self):
+        ctx = [
+            {"attempt": 1, "files_attempted": ["a.go"]},
+            {"attempt": 2, "files_attempted": ["a.go", "b.go"]},
+        ]
+        result = _collect_previously_tried_files(ctx)
+        assert result == {"a.go", "b.go"}
+
+    def test_skips_empty_strings(self):
+        ctx = [{"attempt": 1, "files_attempted": ["", "a.go", ""]}]
+        result = _collect_previously_tried_files(ctx)
+        assert result == {"a.go"}
+
+    def test_handles_missing_key(self):
+        ctx = [{"attempt": 1}]
+        result = _collect_previously_tried_files(ctx)
+        assert result == set()
+
+
+# ------------------------------------------------------------------
+# _format_retry_context tests
+# ------------------------------------------------------------------
+
+
+class TestFormatRetryContext:
+    def test_empty_retries(self):
+        assert _format_retry_context([]) == ""
+
+    def test_single_retry(self):
+        retries = [
+            {
+                "attempt": 1,
+                "approach": "Added nil check",
+                "root_cause_guess": "Nil pointer",
+                "files_attempted": ["reconciler.go"],
+                "validation_issues": ["Tests failing"],
+            }
+        ]
+        text = _format_retry_context(retries)
+        assert "PRIOR IMPLEMENTATION ATTEMPTS (1 failed" in text
+        assert "Attempt 1:" in text
+        assert "Added nil check" in text
+        assert "Nil pointer" in text
+        assert "reconciler.go" in text
+        assert "Tests failing" in text
+        assert "MUST try a different approach" in text
+
+    def test_multiple_retries(self):
+        retries = [
+            {
+                "attempt": 1,
+                "approach": "Approach A",
+                "root_cause_guess": "",
+                "files_attempted": [],
+                "validation_issues": ["No files were modified"],
+            },
+            {
+                "attempt": 2,
+                "approach": "Approach B",
+                "root_cause_guess": "Wrong root cause",
+                "files_attempted": ["a.go"],
+                "validation_issues": ["Tests failing"],
+            },
+        ]
+        text = _format_retry_context(retries)
+        assert "2 failed" in text
+        assert "Attempt 1:" in text
+        assert "Attempt 2:" in text
+        assert "Approach A" in text
+        assert "Approach B" in text
+        assert "NONE (no files were changed)" in text
+
+    def test_truncates_long_approach(self):
+        retries = [
+            {
+                "attempt": 1,
+                "approach": "x" * 500,
+                "root_cause_guess": "",
+                "files_attempted": [],
+                "validation_issues": [],
+            }
+        ]
+        text = _format_retry_context(retries)
+        assert len(text) < 600
+
+    def test_no_approach_or_root_cause(self):
+        retries = [
+            {
+                "attempt": 1,
+                "approach": "",
+                "root_cause_guess": "",
+                "files_attempted": [],
+                "validation_issues": [],
+            }
+        ]
+        text = _format_retry_context(retries)
+        assert "PRIOR IMPLEMENTATION ATTEMPTS" in text
+        assert "Approach tried:" not in text
+        assert "Root cause guess:" not in text
+
+    def test_caps_validation_issues_at_5(self):
+        retries = [
+            {
+                "attempt": 1,
+                "approach": "test",
+                "root_cause_guess": "",
+                "files_attempted": [],
+                "validation_issues": [f"Issue {i}" for i in range(10)],
+            }
+        ]
+        text = _format_retry_context(retries)
+        assert "Issue 4" in text
+        assert "Issue 5" not in text
+
+
+# ------------------------------------------------------------------
+# _extract_retry_context tests
+# ------------------------------------------------------------------
+
+
+class TestExtractRetryContext:
+    def test_no_prior_implement_results(self):
+        phase = _make_implement(prior_results=[_triage_phase_result()])
+        ctx = phase._extract_retry_context()
+        assert ctx == []
+
+    def test_skips_successful_implement(self):
+        success = PhaseResult(
+            phase="implement",
+            success=True,
+            findings={"impl_plan": {"fix_description": "good fix"}},
+        )
+        phase = _make_implement(prior_results=[_triage_phase_result(), success])
+        ctx = phase._extract_retry_context()
+        assert ctx == []
+
+    def test_extracts_single_failure(self):
+        failed = _failed_implement_result(
+            approach="Wrong approach",
+            files_changed=["a.go"],
+            validation_issues=["Tests failing"],
+        )
+        phase = _make_implement(prior_results=[_triage_phase_result(), failed])
+        ctx = phase._extract_retry_context()
+        assert len(ctx) == 1
+        assert ctx[0]["attempt"] == 1
+        assert ctx[0]["approach"] == "Wrong approach"
+        assert ctx[0]["files_attempted"] == ["a.go"]
+        assert ctx[0]["validation_issues"] == ["Tests failing"]
+
+    def test_extracts_multiple_failures(self):
+        f1 = _failed_implement_result(approach="Approach A")
+        f2 = _failed_implement_result(approach="Approach B", files_changed=["b.go"])
+        phase = _make_implement(prior_results=[_triage_phase_result(), f1, f2])
+        ctx = phase._extract_retry_context()
+        assert len(ctx) == 2
+        assert ctx[0]["attempt"] == 1
+        assert ctx[1]["attempt"] == 2
+        assert ctx[0]["approach"] == "Approach A"
+        assert ctx[1]["approach"] == "Approach B"
+
+    def test_skips_non_implement_phases(self):
+        review = _review_phase_result()
+        failed = _failed_implement_result(approach="Test")
+        phase = _make_implement(prior_results=[_triage_phase_result(), review, failed])
+        ctx = phase._extract_retry_context()
+        assert len(ctx) == 1
+        assert ctx[0]["approach"] == "Test"
+
+    def test_files_from_artifacts(self):
+        failed = PhaseResult(
+            phase="implement",
+            success=False,
+            should_continue=True,
+            findings={
+                "validation_issues": ["Tests failing"],
+                "impl_plan": {"fix_description": "fix", "root_cause": "bug"},
+            },
+            artifacts={"files_changed": ["x.py", "y.py"]},
+        )
+        phase = _make_implement(prior_results=[_triage_phase_result(), failed])
+        ctx = phase._extract_retry_context()
+        assert ctx[0]["files_attempted"] == ["x.py", "y.py"]
+
+    def test_files_fallback_to_findings(self):
+        failed = PhaseResult(
+            phase="implement",
+            success=False,
+            should_continue=True,
+            findings={
+                "validation_issues": [],
+                "impl_plan": {
+                    "fix_description": "fix",
+                    "root_cause": "bug",
+                    "files_changed": ["z.go"],
+                },
+            },
+        )
+        phase = _make_implement(prior_results=[_triage_phase_result(), failed])
+        ctx = phase._extract_retry_context()
+        assert ctx[0]["files_attempted"] == ["z.go"]
+
+
+# ------------------------------------------------------------------
+# Retry context in observe/plan pipeline tests
+# ------------------------------------------------------------------
+
+
+class TestRetryContextInPipeline:
+    @pytest.mark.asyncio
+    async def test_observe_includes_retry_context(self):
+        failed = _failed_implement_result(approach="Bad approach")
+        phase = _make_implement(
+            prior_results=[_triage_phase_result(), failed],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        assert "retry_context" in obs
+        assert len(obs["retry_context"]) == 1
+        assert obs["retry_count"] == 1
+
+    @pytest.mark.asyncio
+    async def test_observe_empty_retry_context_on_first_attempt(self):
+        phase = _make_implement(
+            prior_results=[_triage_phase_result()],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        assert obs["retry_context"] == []
+        assert obs["retry_count"] == 0
+
+    @pytest.mark.asyncio
+    async def test_plan_includes_retry_context_in_llm(self):
+        failed = _failed_implement_result(
+            approach="Wrong nil check location",
+            validation_issues=["No files were modified"],
+        )
+        llm = MockProvider(responses=[_fix_response()])
+        phase = ImplementPhase(
+            llm=llm,
+            logger=StructuredLogger(),
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result(), failed],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        msg = llm.call_log[0]["messages"][0]["content"]
+        assert "PRIOR IMPLEMENTATION ATTEMPTS" in msg
+        assert "Wrong nil check location" in msg
+        assert "No files were modified" in msg
+        assert "MUST try a different approach" in msg
+
+    @pytest.mark.asyncio
+    async def test_plan_no_retry_context_on_first_attempt(self):
+        llm = MockProvider(responses=[_fix_response()])
+        phase = ImplementPhase(
+            llm=llm,
+            logger=StructuredLogger(),
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result()],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        msg = llm.call_log[0]["messages"][0]["content"]
+        assert "PRIOR IMPLEMENTATION ATTEMPTS" not in msg
+
+    @pytest.mark.asyncio
+    async def test_plan_retry_context_in_trusted_not_untrusted(self):
+        failed = _failed_implement_result(approach="Bad fix")
+        llm = MockProvider(responses=[_fix_response()])
+        phase = ImplementPhase(
+            llm=llm,
+            logger=StructuredLogger(),
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result(), failed],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        msg = llm.call_log[0]["messages"][0]["content"]
+        untrusted_start = msg.index("UNTRUSTED CONTENT BELOW")
+        retry_pos = msg.index("PRIOR IMPLEMENTATION ATTEMPTS")
+        assert retry_pos < untrusted_start
+
+    @pytest.mark.asyncio
+    async def test_plan_retry_context_with_review_feedback(self):
+        """Both retry context and review feedback present in LLM prompt."""
+        failed = _failed_implement_result(approach="First attempt")
+        review = _review_phase_result(summary="Fix has scope issues")
+        llm = MockProvider(responses=[_fix_response()])
+        phase = ImplementPhase(
+            llm=llm,
+            logger=StructuredLogger(),
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result(), failed, review],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        msg = llm.call_log[0]["messages"][0]["content"]
+        assert "PRIOR IMPLEMENTATION ATTEMPTS" in msg
+        assert "PREVIOUS REVIEW FEEDBACK" in msg
+        assert "First attempt" in msg
+        assert "scope issues" in msg
+
+
+# ------------------------------------------------------------------
+# Reflect includes retry metadata tests
+# ------------------------------------------------------------------
+
+
+class TestReflectRetryMetadata:
+    @pytest.mark.asyncio
+    async def test_failure_includes_files_changed_in_artifacts(self):
+        phase = _make_implement()
+        result = await phase.reflect(
+            {
+                "valid": False,
+                "issues": ["Tests failing"],
+                "tests_passing": False,
+                "linters_passing": True,
+                "files_changed": ["a.go", "b.go"],
+                "impl_plan": {"root_cause": "test", "fix_description": "test fix"},
+            }
+        )
+        assert result.success is False
+        assert result.artifacts.get("files_changed") == ["a.go", "b.go"]
+
+    @pytest.mark.asyncio
+    async def test_failure_includes_impl_plan_in_findings(self):
+        phase = _make_implement()
+        result = await phase.reflect(
+            {
+                "valid": False,
+                "issues": ["No files were modified"],
+                "tests_passing": True,
+                "linters_passing": True,
+                "files_changed": [],
+                "impl_plan": {"root_cause": "nil ptr", "fix_description": "add check"},
+            }
+        )
+        assert result.findings["impl_plan"]["root_cause"] == "nil ptr"
+        assert result.findings["impl_plan"]["fix_description"] == "add check"
+        assert result.findings["validation_issues"] == ["No files were modified"]
+
+    @pytest.mark.asyncio
+    async def test_failure_empty_files_changed(self):
+        phase = _make_implement()
+        result = await phase.reflect(
+            {
+                "valid": False,
+                "issues": ["No files were modified"],
+                "tests_passing": True,
+                "linters_passing": True,
+                "files_changed": [],
+                "impl_plan": {},
+            }
+        )
+        assert result.artifacts.get("files_changed") == []
+
+    @pytest.mark.asyncio
+    async def test_success_still_has_artifacts(self):
+        phase = _make_implement()
+        result = await phase.reflect(
+            {
+                "valid": True,
+                "issues": [],
+                "tests_passing": True,
+                "linters_passing": True,
+                "files_changed": ["x.go"],
+                "diff": "some diff",
+                "inner_iterations_used": 1,
+                "impl_plan": {"root_cause": "test"},
+            }
+        )
+        assert result.success is True
+        assert result.artifacts["files_changed"] == ["x.go"]
+
+
+# ------------------------------------------------------------------
+# Adaptive search strategy tests
+# ------------------------------------------------------------------
+
+
+class TestAdaptiveSearchStrategy:
+    @pytest.mark.asyncio
+    async def test_broad_file_scan_with_repo(self, tmp_path):
+        """_broad_file_scan reads source files from the repo."""
+        phase = _make_implement_with_repo(tmp_path)
+        result = await phase._broad_file_scan()
+        assert len(result) >= 1
+        paths = list(result.keys())
+        assert any("main.go" in p or "reconciler.go" in p for p in paths)
+
+    @pytest.mark.asyncio
+    async def test_broad_file_scan_excludes_files(self, tmp_path):
+        """_broad_file_scan respects the exclude set."""
+        phase = _make_implement_with_repo(tmp_path)
+        result = await phase._broad_file_scan(exclude={"./main.go"})
+        paths = list(result.keys())
+        assert "./main.go" not in paths
+
+    @pytest.mark.asyncio
+    async def test_search_escalates_to_broad_on_retry_2(self, tmp_path):
+        """On retry_count >= 2, _search_relevant_files goes directly to broad scan."""
+        phase = _make_implement_with_repo(tmp_path)
+        result = await phase._search_relevant_files(retry_count=2)
+        assert len(result) >= 1
+
+    @pytest.mark.asyncio
+    async def test_search_escalates_when_no_keywords(self):
+        """When issue has no useful keywords, _extract_keywords returns empty."""
+        kws = _extract_keywords("N/A", "N/A", min_len=4)
+        assert kws == []
+        kws2 = _extract_keywords("bug", "the issue is bad", min_len=5)
+        assert kws2 == []
+
+
+# ------------------------------------------------------------------
+# is_parse_failure tests
+# ------------------------------------------------------------------
+
+
+class TestIsParseFailure:
+    def test_true_for_default_dict(self):
+        plan = parse_implement_response("not json at all")
+        assert is_parse_failure(plan)
+
+    def test_false_for_valid_response(self):
+        plan = json.loads(_fix_response())
+        assert not is_parse_failure(plan)
+
+    def test_false_for_empty_file_changes(self):
+        plan = json.loads(_fix_response_no_changes())
+        assert not is_parse_failure(plan)
+
+    def test_false_when_root_cause_set(self):
+        plan = {
+            "root_cause": "nil pointer",
+            "confidence": 0.0,
+            "fix_description": "Failed to parse LLM response. Raw: x",
+        }
+        assert not is_parse_failure(plan)
+
+    def test_false_when_confidence_nonzero(self):
+        plan = {
+            "root_cause": "unknown",
+            "confidence": 0.5,
+            "fix_description": "Failed to parse LLM response. Raw: x",
+        }
+        assert not is_parse_failure(plan)
+
+
+# ------------------------------------------------------------------
+# validate_impl_plan tests
+# ------------------------------------------------------------------
+
+
+class TestValidateImplPlan:
+    def test_valid_plan(self):
+        plan = json.loads(_fix_response())
+        issues = validate_impl_plan(plan)
+        assert issues == []
+
+    def test_parse_failure(self):
+        plan = parse_implement_response("not json")
+        issues = validate_impl_plan(plan)
+        assert len(issues) == 1
+        assert "parse failure" in issues[0].lower()
+
+    def test_empty_file_changes(self):
+        plan = json.loads(_fix_response_no_changes())
+        issues = validate_impl_plan(plan)
+        assert len(issues) == 1
+        assert "empty or missing" in issues[0].lower()
+
+    def test_missing_file_changes_key(self):
+        plan = {"root_cause": "test", "confidence": 0.5}
+        issues = validate_impl_plan(plan)
+        assert len(issues) >= 1
+        assert "empty or missing" in issues[0].lower()
+
+    def test_file_changes_not_list(self):
+        plan = {"root_cause": "test", "confidence": 0.5, "file_changes": "oops"}
+        issues = validate_impl_plan(plan)
+        assert len(issues) >= 1
+
+    def test_entry_missing_path(self):
+        plan = {
+            "root_cause": "test",
+            "confidence": 0.5,
+            "file_changes": [{"content": "data"}],
+        }
+        issues = validate_impl_plan(plan)
+        assert any("path" in i for i in issues)
+
+    def test_entry_missing_content(self):
+        plan = {
+            "root_cause": "test",
+            "confidence": 0.5,
+            "file_changes": [{"path": "foo.go"}],
+        }
+        issues = validate_impl_plan(plan)
+        assert any("content" in i for i in issues)
+
+    def test_entry_empty_path(self):
+        plan = {
+            "root_cause": "test",
+            "confidence": 0.5,
+            "file_changes": [{"path": "", "content": "data"}],
+        }
+        issues = validate_impl_plan(plan)
+        assert any("path" in i for i in issues)
+
+    def test_entry_empty_content(self):
+        plan = {
+            "root_cause": "test",
+            "confidence": 0.5,
+            "file_changes": [{"path": "a.go", "content": ""}],
+        }
+        issues = validate_impl_plan(plan)
+        assert any("content" in i for i in issues)
+
+    def test_entry_not_dict(self):
+        plan = {
+            "root_cause": "test",
+            "confidence": 0.5,
+            "file_changes": ["not-a-dict"],
+        }
+        issues = validate_impl_plan(plan)
+        assert any("not a dict" in i for i in issues)
+
+    def test_multiple_entries_mixed(self):
+        plan = {
+            "root_cause": "test",
+            "confidence": 0.5,
+            "file_changes": [
+                {"path": "good.go", "content": "package main"},
+                {"path": "", "content": "data"},
+                {"path": "x.go", "content": ""},
+            ],
+        }
+        issues = validate_impl_plan(plan)
+        assert len(issues) == 2
+
+    def test_valid_multiple_entries(self):
+        plan = {
+            "root_cause": "test",
+            "confidence": 0.8,
+            "file_changes": [
+                {"path": "a.go", "content": "package a"},
+                {"path": "b.go", "content": "package b"},
+            ],
+        }
+        issues = validate_impl_plan(plan)
+        assert issues == []
+
+
+# ------------------------------------------------------------------
+# _parse_with_retry tests
+# ------------------------------------------------------------------
+
+
+class TestParseWithRetry:
+    @pytest.mark.asyncio
+    async def test_valid_plan_no_retry(self):
+        """When initial plan is valid, no retry is attempted."""
+        phase = _make_implement(responses=[_fix_response(), "SHOULD NOT BE CALLED"])
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        assert plan["impl_plan"]["root_cause"] == "Nil pointer dereference when owner ref is nil"
+        assert phase.llm._call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_parse_failure_triggers_retry(self):
+        """When LLM returns garbage, a retry is attempted with JSON-only instruction."""
+        phase = _make_implement(
+            responses=["not json at all", _fix_response()],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        assert plan["impl_plan"]["root_cause"] == "Nil pointer dereference when owner ref is nil"
+        assert phase.llm._call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_empty_file_changes_triggers_retry(self):
+        """When LLM returns valid JSON but empty file_changes, retry is triggered."""
+        phase = _make_implement(
+            responses=[_fix_response_no_changes(), _fix_response()],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        assert len(plan["impl_plan"]["file_changes"]) >= 1
+        assert phase.llm._call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_missing_content_triggers_retry(self):
+        """When file_changes entries lack content, retry is triggered."""
+        bad_response = json.dumps(
+            {
+                "root_cause": "test",
+                "fix_description": "test",
+                "file_changes": [{"path": "a.go"}],
+                "confidence": 0.5,
+            }
+        )
+        phase = _make_implement(
+            responses=[bad_response, _fix_response()],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        assert plan["impl_plan"]["file_changes"][0].get("content")
+        assert phase.llm._call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_both_attempts_fail_returns_best(self):
+        """When both attempts fail, returns the better one (parsed > parse failure)."""
+        partial_response = json.dumps(
+            {
+                "root_cause": "some cause",
+                "fix_description": "partial fix",
+                "file_changes": [],
+                "confidence": 0.5,
+            }
+        )
+        phase = _make_implement(
+            responses=["not json", partial_response],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        assert plan["impl_plan"]["root_cause"] == "some cause"
+        assert phase.llm._call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_both_attempts_total_failure(self):
+        """When both attempts produce garbage, returns the original parse failure."""
+        phase = _make_implement(
+            responses=["not json 1", "not json 2"],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        assert plan["impl_plan"]["root_cause"] == "unknown"
+        assert phase.llm._call_count == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_logs_raw_response(self):
+        """When parse fails, the raw response is logged."""
+        logger = StructuredLogger()
+        phase = ImplementPhase(
+            llm=MockProvider(responses=["garbage response", _fix_response()]),
+            logger=logger,
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result()],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        warn_entries = [e for e in logger._entries if e.get("level") == "WARN"]
+        raw_logged = any("garbage response" in e.get("message", "") for e in warn_entries)
+        assert raw_logged
+
+    @pytest.mark.asyncio
+    async def test_retry_records_llm_call(self):
+        """The retry LLM call is recorded in the tracer."""
+        tracer = Tracer()
+        phase = ImplementPhase(
+            llm=MockProvider(responses=["not json", _fix_response()]),
+            logger=StructuredLogger(),
+            tracer=tracer,
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result()],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        llm_actions = [a for a in tracer.get_actions() if a.action_type == "llm_query"]
+        assert len(llm_actions) == 2
+        assert "parse retry" in llm_actions[1].input_description.lower()
+
+    @pytest.mark.asyncio
+    async def test_retry_message_contains_issues(self):
+        """The retry prompt includes the validation issues from the first attempt."""
+        llm = MockProvider(responses=["not json", _fix_response()])
+        phase = ImplementPhase(
+            llm=llm,
+            logger=StructuredLogger(),
+            tracer=Tracer(),
+            repo_path="/tmp/fake",
+            issue_data={"url": "u", "title": "t", "body": "b"},
+            config=EngineConfig(),
+            prior_phase_results=[_triage_phase_result()],
+        )
+        obs = await phase.observe()
+        await phase.plan(obs)
+        retry_msg = llm.call_log[1]["messages"][0]["content"]
+        assert "IMPORTANT" in retry_msg
+        assert "file_changes" in retry_msg
+        assert "ONLY a valid JSON" in retry_msg
+
+    @pytest.mark.asyncio
+    async def test_max_parse_retries_configurable(self):
+        """max_parse_retries=0 disables retry."""
+        cfg = EngineConfig()
+        cfg.phases.implement.max_parse_retries = 0
+        phase = _make_implement(
+            responses=["not json", _fix_response()],
+            tool_executor=None,
+            config=cfg,
+        )
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        assert plan["impl_plan"]["root_cause"] == "unknown"
+        assert phase.llm._call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_max_parse_retries_two(self):
+        """max_parse_retries=2 allows two retries."""
+        cfg = EngineConfig()
+        cfg.phases.implement.max_parse_retries = 2
+        phase = _make_implement(
+            responses=["bad1", "bad2", _fix_response()],
+            tool_executor=None,
+            config=cfg,
+        )
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        assert plan["impl_plan"]["root_cause"] == "Nil pointer dereference when owner ref is nil"
+        assert phase.llm._call_count == 3
+
+
+# ------------------------------------------------------------------
+# _parse_with_retry in _request_refinement tests
+# ------------------------------------------------------------------
+
+
+class TestRefinementParseRetry:
+    @pytest.mark.asyncio
+    async def test_refinement_retries_on_parse_failure(self):
+        """_request_refinement also uses _parse_with_retry."""
+        phase = _make_implement(
+            responses=[
+                _fix_response(),
+                "not json refinement",
+                _fix_response(),
+            ],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        refinement = await phase._request_refinement(
+            plan["impl_plan"],
+            {"passed": False, "output": "test fail"},
+            {"passed": True, "output": "OK"},
+            plan,
+            1,
+        )
+        assert refinement["root_cause"] == "Nil pointer dereference when owner ref is nil"
+        assert phase.llm._call_count == 3
+
+    @pytest.mark.asyncio
+    async def test_refinement_no_retry_on_valid_response(self):
+        """_request_refinement does not retry when response is valid."""
+        phase = _make_implement(
+            responses=[_fix_response(), _fix_response()],
+            tool_executor=None,
+        )
+        obs = await phase.observe()
+        plan = await phase.plan(obs)
+        await phase._request_refinement(
+            plan["impl_plan"],
+            {"passed": False, "output": "test fail"},
+            {"passed": True, "output": "OK"},
+            plan,
+            1,
+        )
+        assert phase.llm._call_count == 2
+
+
+# ------------------------------------------------------------------
+# Config max_parse_retries tests
+# ------------------------------------------------------------------
+
+
+class TestConfigMaxParseRetries:
+    def test_default_value(self):
+        cfg = EngineConfig()
+        assert cfg.phases.implement.max_parse_retries == 1
+
+    def test_yaml_override(self):
+        from engine.config import load_config
+
+        cfg = load_config(overrides={"phases": {"implement": {"max_parse_retries": 3}}})
+        assert cfg.phases.implement.max_parse_retries == 3

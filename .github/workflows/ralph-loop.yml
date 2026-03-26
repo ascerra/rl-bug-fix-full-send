@@ -131,6 +131,8 @@ jobs:
           name: ralph-loop-execution-${{ github.run_id }}
           path: |
             ./output/execution.json
+            ./output/log.json
+            ./output/progress.md
             ./output/reports/
             ./output/transcripts/
             ./output/status.txt

@@ -41,6 +41,7 @@ class ReportData:
     decision_tree: dict[str, Any] = field(default_factory=dict)
     action_map: dict[str, Any] = field(default_factory=dict)
     comparison: dict[str, Any] = field(default_factory=dict)
+    narrative: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -61,6 +62,7 @@ class ReportData:
             "decision_tree": self.decision_tree,
             "action_map": self.action_map,
             "comparison": self.comparison,
+            "narrative": self.narrative,
         }
 
 
@@ -83,6 +85,10 @@ def extract_report_data(execution: dict[str, Any]) -> ReportData:
     action_map = build_action_map(execution)
     comparison = build_comparison(execution)
 
+    from engine.visualization.publisher import build_narrative  # local to avoid cycle
+
+    narrative = build_narrative(execution)
+
     return ReportData(
         execution_id=exec_data.get("id", ""),
         started_at=exec_data.get("started_at", ""),
@@ -101,6 +107,7 @@ def extract_report_data(execution: dict[str, Any]) -> ReportData:
         decision_tree=tree.to_dict(),
         action_map=action_map.to_dict(),
         comparison=comparison.to_dict(),
+        narrative=narrative,
     )
 
 

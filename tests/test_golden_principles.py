@@ -528,7 +528,7 @@ class TestCheckLLMProvenance:
         checker._check_llm_provenance()
         assert len(checker._result.violations) == 1
         assert "2 llm.complete()" in checker._result.violations[0].message
-        assert "1 tracer.record_llm_call()" in checker._result.violations[0].message
+        assert "1 record_llm_call()" in checker._result.violations[0].message
 
 
 class TestCheckToolExecutionTracing:

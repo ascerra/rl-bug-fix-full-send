@@ -15,6 +15,7 @@ import json
 from typing import Any, ClassVar
 
 from engine.phases.base import Phase, PhaseResult
+from engine.tools.test_runner import RepoStack, detect_repo_stack
 
 
 class ImplementPhase(Phase):
@@ -29,15 +30,34 @@ class ImplementPhase(Phase):
     name = "implement"
     allowed_tools: ClassVar[list[str]] = []
 
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._detected_stack: RepoStack | None = None
+
     async def observe(self) -> dict[str, Any]:
-        """Gather triage output, re-read the issue, and read affected files."""
+        """Gather triage output, review feedback, retry context, and read affected files."""
         self.logger.info("Observing: gathering triage context and affected code")
 
         triage_report = self._extract_triage_report()
+        review_feedback = self._extract_review_feedback()
+        retry_context = self._extract_retry_context()
+        retry_count = len(retry_context)
+
+        if retry_context:
+            self.logger.info(f"Retry context: {retry_count} prior failed attempt(s)")
+
+        if review_feedback:
+            self.logger.info(
+                f"Review feedback present (verdict={review_feedback.get('verdict')}, "
+                f"findings={len(review_feedback.get('findings', []))})"
+            )
+
         affected_components = [
             c if isinstance(c, str) else c.get("path", "")
             for c in triage_report.get("affected_components", [])
         ]
+
+        previously_tried_files = _collect_previously_tried_files(retry_context)
 
         file_contents: dict[str, str] = {}
         if self.tool_executor and affected_components:
@@ -49,7 +69,10 @@ class ImplementPhase(Phase):
                     file_contents[component] = result.get("content", "")
 
         if not file_contents and self.tool_executor:
-            file_contents = await self._search_relevant_files()
+            file_contents = await self._search_relevant_files(
+                retry_count=retry_count,
+                exclude_files=previously_tried_files,
+            )
 
         repo_structure = ""
         if self.tool_executor:
@@ -58,16 +81,40 @@ class ImplementPhase(Phase):
                 command=(
                     "find . -type f "
                     "\\( -name '*.py' -o -name '*.go' -o -name '*.js' -o -name '*.ts' "
-                    "-o -name '*.yaml' -o -name '*.yml' -o -name '*.rs' \\) "
+                    "-o -name '*.yaml' -o -name '*.yml' -o -name '*.rs' "
+                    "-o -name 'go.mod' -o -name 'Cargo.toml' -o -name 'package.json' "
+                    "-o -name 'pyproject.toml' -o -name 'Makefile' \\) "
                     "| grep -v node_modules | grep -v __pycache__ | sort | head -100"
                 ),
             )
             if tree.get("success"):
                 repo_structure = tree["stdout"]
 
+        self._detected_stack = detect_repo_stack(
+            repo_structure,
+            test_command_override=self.config.phases.implement.test_command,
+            lint_command_override=self.config.phases.implement.lint_command,
+        )
+        self.logger.info(
+            f"Detected repo stack: {self._detected_stack.language} "
+            f"(from {self._detected_stack.detected_from}, "
+            f"confidence={self._detected_stack.confidence:.2f})"
+        )
+
+        n_files = len(file_contents)
+        retry_count_val = retry_count
+        review_present = "present" if review_feedback else "absent"
+        self.logger.narrate(
+            f"Gathered context: {n_files} files read. "
+            f"Retry #{retry_count_val}. Review feedback: {review_present}."
+        )
+
         return {
             "issue": dict(self.issue_data),
             "triage_report": triage_report,
+            "review_feedback": review_feedback,
+            "retry_context": retry_context,
+            "retry_count": retry_count,
             "affected_components": affected_components,
             "file_contents": file_contents,
             "repo_structure": repo_structure,
@@ -82,6 +129,8 @@ class ImplementPhase(Phase):
         issue_title = self.issue_data.get("title", "N/A")
         issue_body = self.issue_data.get("body", issue_title)
         triage_report = observation.get("triage_report", {})
+        review_feedback = observation.get("review_feedback", {})
+        retry_context = observation.get("retry_context", [])
 
         file_context_parts: list[str] = []
         for path, content in observation.get("file_contents", {}).items():
@@ -98,6 +147,13 @@ class ImplementPhase(Phase):
             f"Repository structure:\n{observation.get('repo_structure', 'N/A')}\n\n"
             f"Affected file contents:\n{file_context}"
         )
+
+        if review_feedback and review_feedback.get("verdict"):
+            trusted_context += "\n\n" + _format_review_feedback(review_feedback)
+
+        if retry_context:
+            trusted_context += "\n\n" + _format_retry_context(retry_context)
+
         untrusted = self._wrap_untrusted_content(
             f"Issue title: {issue_title}\n\nIssue body:\n{issue_body}"
         )
@@ -110,7 +166,7 @@ class ImplementPhase(Phase):
             max_tokens=self.config.llm.max_tokens,
         )
 
-        self.tracer.record_llm_call(
+        self.record_llm_call(
             description="Implementation fix planning",
             model=llm_response.model,
             provider=llm_response.provider,
@@ -123,9 +179,21 @@ class ImplementPhase(Phase):
 
         impl_plan = parse_implement_response(llm_response.content)
 
+        impl_plan, raw_content = await self._parse_with_retry(
+            impl_plan,
+            llm_response.content,
+            system_prompt,
+            user_message,
+            "Implementation fix planning",
+        )
+
+        fix_desc = impl_plan.get("fix_description", "N/A")[:80]
+        n_changes = len(impl_plan.get("file_changes", []))
+        self.logger.narrate(f"Fix strategy: {fix_desc}. {n_changes} file change(s) proposed.")
+
         return {
             "impl_plan": impl_plan,
-            "raw_llm_response": llm_response.content,
+            "raw_llm_response": raw_content,
             "observation": observation,
         }
 
@@ -181,6 +249,14 @@ class ImplementPhase(Phase):
             if diff_result.get("success"):
                 diff_output = diff_result.get("stdout", "")
 
+        n_written = len(files_written)
+        t_pass = "PASS" if test_result.get("passed") else "FAIL"
+        l_pass = "PASS" if lint_result.get("passed") else "FAIL"
+        self.logger.narrate(
+            f"Wrote {n_written} file(s). Tests: {t_pass}. Lint: {l_pass}. "
+            f"Inner iterations: {inner_iterations}/{max_inner}."
+        )
+
         return {
             "impl_plan": impl_plan,
             "files_written": files_written,
@@ -214,6 +290,12 @@ class ImplementPhase(Phase):
         if not diff and files_written:
             issues.append("No git diff detected despite file writes")
 
+        n_issues = len(issues)
+        if n_issues == 0:
+            self.logger.narrate("Implementation validated — all checks pass.")
+        else:
+            self.logger.narrate(f"Validation found {n_issues} issue(s).")
+
         return {
             "valid": len(issues) == 0,
             "issues": issues,
@@ -232,6 +314,10 @@ class ImplementPhase(Phase):
         impl_plan = validation.get("impl_plan", {})
 
         if validation.get("valid"):
+            self.logger.narrate(
+                f"Implementation succeeded. {len(validation.get('files_changed', []))} "
+                "file(s) changed. Moving to review."
+            )
             return PhaseResult(
                 phase=self.name,
                 success=True,
@@ -248,30 +334,106 @@ class ImplementPhase(Phase):
         issues = validation.get("issues", [])
         self.logger.warn(f"Implementation validation issues: {issues}")
 
-        tests_passing = validation.get("tests_passing", False)
-        linters_passing = validation.get("linters_passing", False)
+        failure_findings: dict[str, Any] = {
+            "validation_issues": issues,
+            "impl_plan": impl_plan,
+        }
+        failure_artifacts: dict[str, Any] = {
+            "files_changed": validation.get("files_changed", []),
+        }
 
-        if not tests_passing and not linters_passing:
-            return PhaseResult(
-                phase=self.name,
-                success=False,
-                should_continue=True,
-                findings={
-                    "validation_issues": issues,
-                    "impl_plan": impl_plan,
-                },
-            )
-
+        self.logger.narrate(f"Implementation has issues: {'; '.join(issues[:2])}. Will retry.")
         return PhaseResult(
             phase=self.name,
             success=False,
             should_continue=True,
-            findings={"validation_issues": issues, "impl_plan": impl_plan},
+            findings=failure_findings,
+            artifacts=failure_artifacts,
         )
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _parse_with_retry(
+        self,
+        initial_plan: dict[str, Any],
+        raw_content: str,
+        system_prompt: str,
+        user_message: str,
+        description: str,
+    ) -> tuple[dict[str, Any], str]:
+        """Validate an impl plan and retry the LLM call on parse/validation failure.
+
+        Returns ``(plan, raw_content)`` — either the original on success or the
+        retry result. If both attempts fail, returns whichever has more usable
+        data (prefers a successfully-parsed response with empty file_changes over
+        a total parse failure).
+        """
+        issues = validate_impl_plan(initial_plan)
+        if not issues:
+            return initial_plan, raw_content
+
+        max_retries = self.config.phases.implement.max_parse_retries
+
+        self.logger.warn(
+            f"LLM response validation failed ({len(issues)} issue(s)): "
+            f"{'; '.join(issues[:3])}. "
+            f"Raw response (truncated): {raw_content[:300]}"
+        )
+
+        best_plan = initial_plan
+        best_content = raw_content
+
+        for attempt in range(max_retries):
+            self.logger.info(
+                f"Retrying LLM call for valid JSON (attempt {attempt + 1}/{max_retries})"
+            )
+
+            retry_message = (
+                f"{user_message}\n\n"
+                "IMPORTANT: Your previous response was not valid or was incomplete. "
+                f"Issues: {'; '.join(issues[:5])}.\n\n"
+                "You MUST respond with ONLY a valid JSON object — no markdown, "
+                "no explanation, no code fences. The JSON must include a non-empty "
+                "`file_changes` array where each entry has a non-empty `path` string "
+                "and a non-empty `content` string containing the COMPLETE file content."
+            )
+
+            llm_response = await self.llm.complete(
+                system_prompt=system_prompt,
+                messages=[{"role": "user", "content": retry_message}],
+                temperature=self.config.llm.temperature,
+                max_tokens=self.config.llm.max_tokens,
+            )
+
+            self.record_llm_call(
+                description=f"{description} (parse retry {attempt + 1})",
+                model=llm_response.model,
+                provider=llm_response.provider,
+                tokens_in=llm_response.tokens_in,
+                tokens_out=llm_response.tokens_out,
+                latency_ms=llm_response.latency_ms,
+                prompt_summary="JSON-only retry prompt",
+                response_summary=llm_response.content[:500],
+            )
+
+            retry_plan = parse_implement_response(llm_response.content)
+            retry_issues = validate_impl_plan(retry_plan)
+
+            if not retry_issues:
+                self.logger.info("Parse retry succeeded — got valid JSON with file_changes")
+                return retry_plan, llm_response.content
+
+            self.logger.warn(
+                f"Parse retry {attempt + 1} also failed: {'; '.join(retry_issues[:3])}"
+            )
+
+            if not is_parse_failure(retry_plan) and is_parse_failure(best_plan):
+                best_plan = retry_plan
+                best_content = llm_response.content
+
+        return best_plan, best_content
 
     def _extract_triage_report(self) -> dict[str, Any]:
         """Extract the triage report from prior phase results (if available)."""
@@ -284,38 +446,98 @@ class ImplementPhase(Phase):
                     return result.findings
         return {}
 
-    async def _search_relevant_files(self) -> dict[str, str]:
-        """Fallback: grep the repo for keywords from the issue title/body."""
+    def _extract_review_feedback(self) -> dict[str, Any]:
+        """Extract the most recent review feedback from prior phase results.
+
+        When the review phase returns ``request_changes`` and backtracks to
+        implement, its ``PhaseResult`` contains the review report in
+        ``findings`` and/or ``artifacts.review_report``.  This method reads
+        that data so the implementer can see what the reviewer flagged and
+        adapt its approach.
+        """
+        for result in reversed(self.prior_results):
+            if result.phase != "review":
+                continue
+            review = result.artifacts.get("review_report") or result.findings
+            if not review:
+                continue
+            return {
+                "verdict": review.get("verdict", ""),
+                "findings": review.get("findings", []),
+                "summary": review.get("summary", ""),
+                "scope_assessment": review.get("scope_assessment", ""),
+            }
+        return {}
+
+    def _extract_retry_context(self) -> list[dict[str, Any]]:
+        """Extract context from prior failed implement attempts.
+
+        Scans ``self.prior_results`` for prior ``implement`` failures and
+        extracts what was tried and why it failed, so the next attempt can
+        adapt its strategy.
+        """
+        retries: list[dict[str, Any]] = []
+        for result in self.prior_results:
+            if result.phase != "implement" or result.success:
+                continue
+            impl_plan = result.findings.get("impl_plan", {})
+            retry: dict[str, Any] = {
+                "attempt": len(retries) + 1,
+                "validation_issues": result.findings.get("validation_issues", []),
+                "approach": impl_plan.get("fix_description", ""),
+                "root_cause_guess": impl_plan.get("root_cause", ""),
+                "files_attempted": (
+                    result.artifacts.get("files_changed", [])
+                    or result.findings.get("impl_plan", {}).get("files_changed", [])
+                ),
+            }
+            retries.append(retry)
+        return retries
+
+    async def _search_relevant_files(
+        self,
+        retry_count: int = 0,
+        exclude_files: set[str] | None = None,
+    ) -> dict[str, str]:
+        """Fallback file search with escalating strategy based on retry count.
+
+        - **Retry 0**: keyword search (> 4 chars) from issue title/body
+        - **Retry 1**: broader keywords (> 3 chars), more results
+        - **Retry 2+**: broad file listing of all source files
+        """
         assert self.tool_executor is not None
+        exclude = exclude_files or set()
+
+        if retry_count >= 2:
+            return await self._broad_file_scan(exclude)
+
         title = self.issue_data.get("title", "")
         body = self.issue_data.get("body", "")
+        min_len = 4 if retry_count == 0 else 3
+        max_keywords = 5 if retry_count == 0 else 8
+        max_files = 5 if retry_count == 0 else 8
 
-        keywords: list[str] = []
-        for word in title.split():
-            cleaned = word.strip(".,;:!?()[]{}\"'")
-            if len(cleaned) > 4 and cleaned.isalnum():
-                keywords.append(cleaned)
+        keywords = _extract_keywords(title, body, min_len=min_len, max_keywords=max_keywords)
 
         if not keywords:
-            for word in body.split()[:200]:
-                cleaned = word.strip(".,;:!?()[]{}\"'")
-                if len(cleaned) > 6 and cleaned.replace("-", "").replace("_", "").isalnum():
-                    keywords.append(cleaned)
-                    if len(keywords) >= 5:
-                        break
+            return await self._broad_file_scan(exclude)
 
         file_contents: dict[str, str] = {}
-        seen_files: set[str] = set()
-        for kw in keywords[:5]:
+        seen_files: set[str] = set(exclude)
+        for kw in keywords:
             result = await self.tool_executor.execute(
                 "shell_run",
-                command=f"grep -rl '{kw}' --include='*.yaml' --include='*.yml' --include='*.py' --include='*.go' --include='*.ts' . 2>/dev/null | head -5",
+                command=(
+                    f"grep -rl '{kw}' --include='*.yaml' --include='*.yml'"
+                    " --include='*.py' --include='*.go' --include='*.ts'"
+                    " . 2>/dev/null | head -5"
+                ),
                 timeout=15,
             )
             if result.get("success"):
                 for path in result.get("stdout", "").strip().splitlines():
                     path = path.strip()
-                    if path and path not in seen_files and len(file_contents) < 5:
+                    if path and path not in seen_files and len(file_contents) < max_files:
                         seen_files.add(path)
                         read_result = await self.tool_executor.execute("file_read", path=path)
                         if read_result.get("success"):
@@ -323,8 +545,53 @@ class ImplementPhase(Phase):
 
         if file_contents:
             self.logger.info(
-                f"Fallback file search found {len(file_contents)} files: "
-                f"{list(file_contents.keys())}"
+                f"Fallback file search (strategy={retry_count}) found "
+                f"{len(file_contents)} files: {list(file_contents.keys())}"
+            )
+        elif retry_count < 2:
+            self.logger.info("Keyword search found nothing — escalating to broad file scan")
+            return await self._broad_file_scan(exclude)
+        return file_contents
+
+    async def _broad_file_scan(self, exclude: set[str] | None = None) -> dict[str, str]:
+        """List all source files and read the most likely candidates.
+
+        Used as a last-resort strategy when keyword search fails. Reads the
+        shortest source files first (shorter files are more likely to be
+        focused modules with clear purpose).
+        """
+        assert self.tool_executor is not None
+        exclude = exclude or set()
+
+        result = await self.tool_executor.execute(
+            "shell_run",
+            command=(
+                "find . -type f "
+                "\\( -name '*.py' -o -name '*.go' -o -name '*.js' -o -name '*.ts' "
+                "-o -name '*.yaml' -o -name '*.yml' -o -name '*.rs' \\) "
+                "| grep -v node_modules | grep -v __pycache__ | grep -v vendor "
+                "| grep -v .git | head -30"
+            ),
+            timeout=15,
+        )
+        if not result.get("success"):
+            return {}
+
+        candidates = [
+            p.strip()
+            for p in result.get("stdout", "").strip().splitlines()
+            if p.strip() and p.strip() not in exclude
+        ]
+
+        file_contents: dict[str, str] = {}
+        for path in candidates[:8]:
+            read_result = await self.tool_executor.execute("file_read", path=path)
+            if read_result.get("success"):
+                file_contents[path] = read_result.get("content", "")
+
+        if file_contents:
+            self.logger.info(
+                f"Broad file scan found {len(file_contents)} files: {list(file_contents.keys())}"
             )
         return file_contents
 
@@ -358,43 +625,37 @@ class ImplementPhase(Phase):
         return files_written
 
     async def _run_tests(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
-        """Run tests and return structured result."""
+        """Run tests using the detected repo stack's test command."""
         if not self.tool_executor:
             return {"passed": False, "output": "No tool executor available"}
 
-        result = await self.tool_executor.execute(
-            "shell_run",
-            command=(
-                "python -m pytest --tb=short -q 2>&1 "
-                "|| go test ./... 2>&1 "
-                "|| npm test 2>&1 "
-                "|| echo 'No test runner detected'"
-            ),
-            timeout=120,
+        cmd = (
+            self._detected_stack.test_command
+            if self._detected_stack
+            else "echo 'No test runner detected'"
         )
+
+        result = await self.tool_executor.execute("shell_run", command=cmd, timeout=120)
         output = result.get("stdout", "") + result.get("stderr", "")
         passed = result.get("success", False)
-        actions.append({"action": "run_tests", "success": passed})
+        actions.append({"action": "run_tests", "success": passed, "command": cmd})
         return {"passed": passed, "output": output[:3000]}
 
     async def _run_linters(self, actions: list[dict[str, Any]]) -> dict[str, Any]:
-        """Run linters and return structured result."""
+        """Run linters using the detected repo stack's lint command."""
         if not self.tool_executor:
             return {"passed": False, "output": "No tool executor available"}
 
-        result = await self.tool_executor.execute(
-            "shell_run",
-            command=(
-                "ruff check . 2>&1 "
-                "|| golangci-lint run ./... 2>&1 "
-                "|| npx eslint . 2>&1 "
-                "|| echo 'No linter detected'"
-            ),
-            timeout=60,
+        cmd = (
+            self._detected_stack.lint_command
+            if self._detected_stack
+            else "echo 'No linter detected'"
         )
+
+        result = await self.tool_executor.execute("shell_run", command=cmd, timeout=60)
         output = result.get("stdout", "") + result.get("stderr", "")
         passed = result.get("success", False)
-        actions.append({"action": "run_linters", "success": passed})
+        actions.append({"action": "run_linters", "success": passed, "command": cmd})
         return {"passed": passed, "output": output[:3000]}
 
     async def _request_refinement(
@@ -435,7 +696,7 @@ class ImplementPhase(Phase):
             max_tokens=self.config.llm.max_tokens,
         )
 
-        self.tracer.record_llm_call(
+        self.record_llm_call(
             description=f"Implementation refinement (iteration {iteration})",
             model=llm_response.model,
             provider=llm_response.provider,
@@ -446,7 +707,189 @@ class ImplementPhase(Phase):
             response_summary=llm_response.content[:500],
         )
 
-        return parse_implement_response(llm_response.content)
+        impl_plan = parse_implement_response(llm_response.content)
+
+        impl_plan, _ = await self._parse_with_retry(
+            impl_plan,
+            llm_response.content,
+            system_prompt,
+            user_message,
+            f"Implementation refinement retry (iteration {iteration})",
+        )
+
+        return impl_plan
+
+
+_STOPWORDS: set[str] = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "when",
+    "have",
+    "been",
+    "does",
+    "not",
+    "are",
+    "was",
+    "were",
+    "but",
+    "they",
+    "will",
+    "can",
+    "should",
+    "would",
+    "could",
+    "about",
+    "into",
+    "more",
+    "some",
+    "than",
+    "then",
+    "also",
+    "just",
+    "only",
+    "each",
+    "other",
+    "after",
+    "before",
+    "between",
+    "through",
+    "error",
+    "issue",
+    "bug",
+    "fix",
+    "none",
+    "null",
+    "true",
+    "false",
+}
+
+
+def _extract_keywords(
+    title: str,
+    body: str,
+    min_len: int = 5,
+    max_keywords: int = 5,
+) -> list[str]:
+    """Extract meaningful search keywords from issue title and body.
+
+    Filters out stopwords and trivially short/meaningless tokens.
+    """
+    keywords: list[str] = []
+    seen: set[str] = set()
+
+    for word in title.split():
+        if len(keywords) >= max_keywords:
+            break
+        cleaned = word.strip(".,;:!?()[]{}\"'`")
+        lower = cleaned.lower()
+        if (
+            len(cleaned) >= min_len
+            and cleaned.replace("-", "").replace("_", "").isalnum()
+            and lower not in _STOPWORDS
+            and lower not in seen
+            and lower != "n/a"
+        ):
+            seen.add(lower)
+            keywords.append(cleaned)
+
+    if len(keywords) < max_keywords:
+        for word in body.split()[:200]:
+            cleaned = word.strip(".,;:!?()[]{}\"'`")
+            lower = cleaned.lower()
+            if (
+                len(cleaned) >= max(min_len, 4)
+                and cleaned.replace("-", "").replace("_", "").isalnum()
+                and lower not in _STOPWORDS
+                and lower not in seen
+                and lower != "n/a"
+            ):
+                seen.add(lower)
+                keywords.append(cleaned)
+                if len(keywords) >= max_keywords:
+                    break
+
+    return keywords
+
+
+def _collect_previously_tried_files(
+    retry_context: list[dict[str, Any]],
+) -> set[str]:
+    """Collect file paths from all prior retry attempts."""
+    files: set[str] = set()
+    for retry in retry_context:
+        for f in retry.get("files_attempted", []):
+            if isinstance(f, str) and f:
+                files.add(f)
+    return files
+
+
+def _format_retry_context(retries: list[dict[str, Any]]) -> str:
+    """Format prior implementation attempts as structured text for the LLM.
+
+    Produces a ``PRIOR IMPLEMENTATION ATTEMPTS`` section that tells the LLM
+    what was already tried and why it failed, so it can adapt its strategy.
+    """
+    if not retries:
+        return ""
+    lines: list[str] = [
+        f"PRIOR IMPLEMENTATION ATTEMPTS ({len(retries)} failed "
+        "— you MUST try a different approach):",
+    ]
+    for r in retries:
+        lines.append(f"  Attempt {r['attempt']}:")
+        if r.get("approach"):
+            lines.append(f"    Approach tried: {r['approach'][:300]}")
+        if r.get("root_cause_guess"):
+            lines.append(f"    Root cause guess: {r['root_cause_guess'][:300]}")
+        files = r.get("files_attempted", [])
+        if files:
+            lines.append(f"    Files modified: {', '.join(str(f) for f in files[:10])}")
+        else:
+            lines.append("    Files modified: NONE (no files were changed)")
+        issues = r.get("validation_issues", [])
+        if issues:
+            lines.append(f"    Why it failed: {'; '.join(str(i) for i in issues[:5])}")
+    lines.append("")
+    lines.append(
+        "IMPORTANT: Do NOT repeat any of the above approaches. "
+        "Analyze the failure reasons and try a fundamentally different strategy."
+    )
+    return "\n".join(lines)
+
+
+def _format_review_feedback(feedback: dict[str, Any]) -> str:
+    """Format review feedback as a structured text block for the LLM context.
+
+    Produces a ``PREVIOUS REVIEW FEEDBACK`` section that the implementer
+    LLM can read to understand what the reviewer flagged and adapt.
+    """
+    lines: list[str] = [
+        "PREVIOUS REVIEW FEEDBACK (address these issues in your fix):",
+        f"  Verdict: {feedback.get('verdict', 'N/A')}",
+        f"  Summary: {feedback.get('summary', 'N/A')}",
+    ]
+    findings = feedback.get("findings", [])
+    if findings:
+        lines.append(f"  Findings ({len(findings)}):")
+        for i, f in enumerate(findings[:10], 1):
+            dim = f.get("dimension", "unknown")
+            sev = f.get("severity", "unknown")
+            desc = f.get("description", "")
+            suggestion = f.get("suggestion", "")
+            file_path = f.get("file", "")
+            line_num = f.get("line", "")
+            loc = f"{file_path}:{line_num}" if file_path and line_num else file_path
+            lines.append(f"    {i}. [{dim}/{sev}] {desc}")
+            if loc:
+                lines.append(f"       Location: {loc}")
+            if suggestion:
+                lines.append(f"       Suggestion: {suggestion}")
+    return "\n".join(lines)
 
 
 def parse_implement_response(content: str) -> dict[str, Any]:
@@ -490,3 +933,45 @@ def parse_implement_response(content: str) -> dict[str, Any]:
         "confidence": 0.0,
         "diff_summary": "",
     }
+
+
+_PARSE_FAILURE_MARKER = "Failed to parse LLM response."
+
+
+def is_parse_failure(plan: dict[str, Any]) -> bool:
+    """Return True if the plan was produced by a failed parse (default dict)."""
+    return (
+        plan.get("root_cause") == "unknown"
+        and plan.get("confidence") == 0.0
+        and _PARSE_FAILURE_MARKER in plan.get("fix_description", "")
+    )
+
+
+def validate_impl_plan(plan: dict[str, Any]) -> list[str]:
+    """Validate a parsed implementation plan has usable file_changes.
+
+    Returns a list of issue descriptions. Empty list means valid.
+    """
+    issues: list[str] = []
+
+    if is_parse_failure(plan):
+        issues.append("JSON parse failure — response was not valid JSON")
+        return issues
+
+    file_changes = plan.get("file_changes")
+    if not isinstance(file_changes, list) or len(file_changes) == 0:
+        issues.append("file_changes is empty or missing — no files to write")
+        return issues
+
+    for i, entry in enumerate(file_changes):
+        if not isinstance(entry, dict):
+            issues.append(f"file_changes[{i}] is not a dict")
+            continue
+        path = entry.get("path", "")
+        content = entry.get("content", "")
+        if not path:
+            issues.append(f"file_changes[{i}] has empty or missing 'path'")
+        if not content:
+            issues.append(f"file_changes[{i}] has empty or missing 'content'")
+
+    return issues

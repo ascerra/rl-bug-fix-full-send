@@ -6,11 +6,12 @@ time budget enforcement, escalation behavior, and phase validation independence.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from pathlib import Path
 from typing import Any, ClassVar
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -121,6 +122,12 @@ def _all_success_registry() -> dict[str, type[Phase]]:
 # ------------------------------------------------------------------
 # Fixtures
 # ------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    """Prevent real sleeping during backoff so retry tests stay fast."""
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
 
 
 @pytest.fixture()
@@ -1466,3 +1473,317 @@ class TestPhaseValidationIndependence:
         """Validate phase has github_api for PR creation."""
         assert "github_api" in VALIDATE_TOOLS
         assert "file_write" not in VALIDATE_TOOLS
+
+
+# ------------------------------------------------------------------
+# Retry backoff (7.12)
+# ------------------------------------------------------------------
+
+
+class TestRetryBackoff:
+    """Exponential backoff between phase retries (D12)."""
+
+    def test_compute_backoff_delay_defaults(self):
+        """Default config: 1s base, 4s max → 1, 2, 4, 4, 4..."""
+        cfg = EngineConfig()
+        loop = RalphLoop(
+            config=cfg,
+            llm=MockProvider(),
+            issue_url="https://github.com/t/r/issues/1",
+            repo_path="/tmp/r",
+        )
+        loop._consecutive_retries = 1
+        assert loop._compute_backoff_delay() == 1.0
+        loop._consecutive_retries = 2
+        assert loop._compute_backoff_delay() == 2.0
+        loop._consecutive_retries = 3
+        assert loop._compute_backoff_delay() == 4.0
+        loop._consecutive_retries = 4
+        assert loop._compute_backoff_delay() == 4.0
+
+    def test_compute_backoff_delay_custom_config(self):
+        """Custom base=0.5, max=2 → 0.5, 1.0, 2.0, 2.0..."""
+        cfg = EngineConfig(
+            loop=LoopConfig(retry_backoff_base_seconds=0.5, retry_backoff_max_seconds=2.0)
+        )
+        loop = RalphLoop(
+            config=cfg,
+            llm=MockProvider(),
+            issue_url="https://github.com/t/r/issues/1",
+            repo_path="/tmp/r",
+        )
+        loop._consecutive_retries = 1
+        assert loop._compute_backoff_delay() == 0.5
+        loop._consecutive_retries = 2
+        assert loop._compute_backoff_delay() == 1.0
+        loop._consecutive_retries = 3
+        assert loop._compute_backoff_delay() == 2.0
+        loop._consecutive_retries = 4
+        assert loop._compute_backoff_delay() == 2.0
+
+    def test_compute_backoff_delay_zero_retries(self):
+        """Zero retries → base delay (exponent clamped to 0)."""
+        cfg = EngineConfig()
+        loop = RalphLoop(
+            config=cfg,
+            llm=MockProvider(),
+            issue_url="https://github.com/t/r/issues/1",
+            repo_path="/tmp/r",
+        )
+        loop._consecutive_retries = 0
+        assert loop._compute_backoff_delay() == 1.0
+
+    def test_compute_backoff_delay_zero_base(self):
+        """Zero base → always 0 delay."""
+        cfg = EngineConfig(
+            loop=LoopConfig(retry_backoff_base_seconds=0.0, retry_backoff_max_seconds=0.0)
+        )
+        loop = RalphLoop(
+            config=cfg,
+            llm=MockProvider(),
+            issue_url="https://github.com/t/r/issues/1",
+            repo_path="/tmp/r",
+        )
+        for n in range(5):
+            loop._consecutive_retries = n
+            assert loop._compute_backoff_delay() == 0.0
+
+    @pytest.mark.asyncio
+    async def test_soft_failure_retry_sleeps(self, tmp_repo, output_dir, mock_llm):
+        """Soft failure triggers asyncio.sleep with backoff delay."""
+        cfg = EngineConfig(loop=LoopConfig(max_iterations=10))
+        registry: dict[str, type[Phase]] = {}
+        registry["triage"] = _make_cycling_stub(
+            "triage",
+            [
+                PhaseResult(phase="triage", success=False, should_continue=True),
+                PhaseResult(phase="triage", success=False, should_continue=True),
+                _success_result("triage", "implement"),
+            ],
+        )
+        for i, name in enumerate(PHASE_ORDER[1:], start=1):
+            nxt = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
+            registry[name] = _make_stub(name, _success_result(name, nxt))
+
+        loop = RalphLoop(
+            config=cfg,
+            llm=mock_llm,
+            issue_url="https://github.com/test/repo/issues/1",
+            repo_path=str(tmp_repo),
+            output_dir=str(output_dir),
+            phase_registry=registry,
+        )
+        execution = await loop.run()
+
+        assert execution.result["status"] == "success"
+        sleep_calls = asyncio.sleep.call_args_list
+        assert len(sleep_calls) == 2
+        assert sleep_calls[0].args[0] == 1.0
+        assert sleep_calls[1].args[0] == 2.0
+
+    @pytest.mark.asyncio
+    async def test_review_backtrack_sleeps(self, tmp_repo, output_dir, mock_llm):
+        """Review → implement backtrack triggers asyncio.sleep with backoff delay."""
+        cfg = EngineConfig(loop=LoopConfig(max_iterations=15))
+        registry = dict(_all_success_registry())
+        registry["review"] = _make_cycling_stub(
+            "review",
+            [
+                PhaseResult(
+                    phase="review",
+                    success=False,
+                    should_continue=True,
+                    next_phase="implement",
+                ),
+                _success_result("review", "validate"),
+            ],
+        )
+        loop = RalphLoop(
+            config=cfg,
+            llm=mock_llm,
+            issue_url="https://github.com/test/repo/issues/1",
+            repo_path=str(tmp_repo),
+            output_dir=str(output_dir),
+            phase_registry=registry,
+        )
+        execution = await loop.run()
+
+        assert execution.result["status"] == "success"
+        sleep_calls = asyncio.sleep.call_args_list
+        assert len(sleep_calls) >= 1
+        assert sleep_calls[0].args[0] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_consecutive_retries_reset_on_success(self, tmp_repo, output_dir, mock_llm):
+        """Retry counter resets to 0 when a phase succeeds and advances."""
+        cfg = EngineConfig(loop=LoopConfig(max_iterations=15))
+        registry: dict[str, type[Phase]] = {}
+        registry["triage"] = _make_cycling_stub(
+            "triage",
+            [
+                PhaseResult(phase="triage", success=False, should_continue=True),
+                _success_result("triage", "implement"),
+            ],
+        )
+        registry["implement"] = _make_cycling_stub(
+            "implement",
+            [
+                PhaseResult(phase="implement", success=False, should_continue=True),
+                _success_result("implement", "review"),
+            ],
+        )
+        for i, name in enumerate(PHASE_ORDER[2:], start=2):
+            nxt = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
+            registry[name] = _make_stub(name, _success_result(name, nxt))
+
+        loop = RalphLoop(
+            config=cfg,
+            llm=mock_llm,
+            issue_url="https://github.com/test/repo/issues/1",
+            repo_path=str(tmp_repo),
+            output_dir=str(output_dir),
+            phase_registry=registry,
+        )
+        execution = await loop.run()
+
+        assert execution.result["status"] == "success"
+        sleep_calls = asyncio.sleep.call_args_list
+        assert len(sleep_calls) == 2
+        assert sleep_calls[0].args[0] == 1.0
+        assert sleep_calls[1].args[0] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_backoff_narrated(self, tmp_repo, output_dir, mock_llm):
+        """Backoff delay is included in narration messages."""
+        cfg = EngineConfig(loop=LoopConfig(max_iterations=10))
+        registry: dict[str, type[Phase]] = {}
+        registry["triage"] = _make_cycling_stub(
+            "triage",
+            [
+                PhaseResult(phase="triage", success=False, should_continue=True),
+                _success_result("triage", "implement"),
+            ],
+        )
+        for i, name in enumerate(PHASE_ORDER[1:], start=1):
+            nxt = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
+            registry[name] = _make_stub(name, _success_result(name, nxt))
+
+        loop = RalphLoop(
+            config=cfg,
+            llm=mock_llm,
+            issue_url="https://github.com/test/repo/issues/1",
+            repo_path=str(tmp_repo),
+            output_dir=str(output_dir),
+            phase_registry=registry,
+        )
+        await loop.run()
+
+        narrations = loop.logger.get_narrations()
+        backoff_msgs = [n for n in narrations if "backing off" in n["message"].lower()]
+        assert len(backoff_msgs) >= 1
+        assert "1.0s" in backoff_msgs[0]["message"]
+
+    @pytest.mark.asyncio
+    async def test_no_backoff_on_normal_progression(self, tmp_repo, output_dir, config, mock_llm):
+        """No sleep when all phases succeed on first try."""
+        loop = RalphLoop(
+            config=config,
+            llm=mock_llm,
+            issue_url="https://github.com/test/repo/issues/1",
+            repo_path=str(tmp_repo),
+            output_dir=str(output_dir),
+            phase_registry=_all_success_registry(),
+        )
+        execution = await loop.run()
+
+        assert execution.result["status"] == "success"
+        assert asyncio.sleep.call_count == 0
+
+    @pytest.mark.asyncio
+    async def test_backoff_config_via_yaml(self):
+        """Backoff config loaded from YAML overrides."""
+        from engine.config import load_config
+
+        cfg = load_config(
+            overrides={
+                "ralph_loop": {
+                    "retry_backoff_base_seconds": 0.25,
+                    "retry_backoff_max_seconds": 8.0,
+                }
+            }
+        )
+        assert cfg.loop.retry_backoff_base_seconds == 0.25
+        assert cfg.loop.retry_backoff_max_seconds == 8.0
+
+    @pytest.mark.asyncio
+    async def test_multiple_backtracks_each_start_fresh(self, tmp_repo, output_dir, mock_llm):
+        """Non-consecutive backtracks reset the counter — each gets base delay."""
+        cfg = EngineConfig(
+            loop=LoopConfig(
+                max_iterations=20,
+                escalation_on_review_block_after=4,
+            )
+        )
+        registry = dict(_all_success_registry())
+        registry["review"] = _make_cycling_stub(
+            "review",
+            [
+                PhaseResult(
+                    phase="review", success=False, should_continue=True, next_phase="implement"
+                ),
+                PhaseResult(
+                    phase="review", success=False, should_continue=True, next_phase="implement"
+                ),
+                _success_result("review", "validate"),
+            ],
+        )
+        loop = RalphLoop(
+            config=cfg,
+            llm=mock_llm,
+            issue_url="https://github.com/test/repo/issues/1",
+            repo_path=str(tmp_repo),
+            output_dir=str(output_dir),
+            phase_registry=registry,
+        )
+        execution = await loop.run()
+
+        assert execution.result["status"] == "success"
+        sleep_calls = asyncio.sleep.call_args_list
+        delays = [c.args[0] for c in sleep_calls]
+        assert len(delays) == 2
+        assert delays[0] == 1.0
+        assert delays[1] == 1.0
+
+    @pytest.mark.asyncio
+    async def test_consecutive_soft_failures_escalate_backoff(self, tmp_repo, output_dir, mock_llm):
+        """Three consecutive soft failures of the same phase produce escalating delays."""
+        cfg = EngineConfig(loop=LoopConfig(max_iterations=10))
+        registry: dict[str, type[Phase]] = {}
+        registry["triage"] = _make_cycling_stub(
+            "triage",
+            [
+                PhaseResult(phase="triage", success=False, should_continue=True),
+                PhaseResult(phase="triage", success=False, should_continue=True),
+                PhaseResult(phase="triage", success=False, should_continue=True),
+                _success_result("triage", "implement"),
+            ],
+        )
+        for i, name in enumerate(PHASE_ORDER[1:], start=1):
+            nxt = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
+            registry[name] = _make_stub(name, _success_result(name, nxt))
+
+        loop = RalphLoop(
+            config=cfg,
+            llm=mock_llm,
+            issue_url="https://github.com/test/repo/issues/1",
+            repo_path=str(tmp_repo),
+            output_dir=str(output_dir),
+            phase_registry=registry,
+        )
+        execution = await loop.run()
+
+        assert execution.result["status"] == "success"
+        sleep_calls = asyncio.sleep.call_args_list
+        delays = [c.args[0] for c in sleep_calls]
+        assert len(delays) == 3
+        assert delays == [1.0, 2.0, 4.0]

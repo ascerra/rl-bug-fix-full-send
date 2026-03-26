@@ -13,13 +13,14 @@ and execution completes within time budget.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
@@ -400,6 +401,12 @@ def _make_loop(
     return loop
 
 
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch):
+    """Prevent real sleeping during backoff so e2e tests stay fast."""
+    monkeypatch.setattr(asyncio, "sleep", AsyncMock())
+
+
 # ====================================================================
 # 1. FULL PIPELINE — all phases run end-to-end against each bug
 # ====================================================================
@@ -668,6 +675,27 @@ class TestEndToEndMetrics:
             assert metrics["phase_iteration_counts"][phase] >= 1
             assert phase in metrics["time_per_phase_ms"]
             assert metrics["time_per_phase_ms"][phase] > 0
+
+    @pytest.mark.asyncio
+    async def test_llm_metrics_counters_nonzero(self, tmp_path):
+        """LLM call counters must be non-zero after a full run (D2 fix)."""
+        bug = NIL_POINTER_BUG
+        repo = _init_repo(tmp_path, bug)
+        out = tmp_path / "output"
+        out.mkdir()
+        loop = _make_loop(repo, out, bug)
+        execution = await loop.run()
+
+        metrics = execution.metrics
+        llm_actions = [a for a in execution.actions if a["action_type"] == "llm_query"]
+        assert metrics["total_llm_calls"] == len(llm_actions), (
+            "total_llm_calls must match the number of llm_query actions in the trace"
+        )
+        assert metrics["total_llm_calls"] >= 4, (
+            "Expect at least 4 LLM calls (triage, implement, review, validate)"
+        )
+        assert metrics["total_tokens_in"] > 0
+        assert metrics["total_tokens_out"] > 0
 
     @pytest.mark.asyncio
     async def test_actions_recorded_across_phases(self, tmp_path):

@@ -191,6 +191,13 @@
   </div>
 </div>
 
+<!-- Narrative Summary -->
+{% if report.narrative %}
+<div class="card" style="border-left: 3px solid var(--accent); margin-bottom: 1.5rem;">
+  <p style="line-height: 1.8; color: var(--text);">{{ report.narrative }}</p>
+</div>
+{% endif %}
+
 <!-- Metrics Overview -->
 <div class="card-grid">
   <div class="card metric-card">

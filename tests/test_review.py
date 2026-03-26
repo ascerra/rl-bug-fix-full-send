@@ -653,22 +653,6 @@ class TestReviewReflect:
         assert result.escalate is False
 
     @pytest.mark.asyncio
-    async def test_block_escalates(self):
-        phase = _make_review()
-        result = await phase.reflect(
-            {
-                "valid": True,
-                "verdict": "block",
-                "injection_detected": False,
-                "review_result": json.loads(_block_response()),
-                "verified_findings": [],
-            }
-        )
-        assert result.success is False
-        assert result.escalate is True
-        assert "blocked" in result.escalation_reason.lower()
-
-    @pytest.mark.asyncio
     async def test_injection_detected_escalates(self):
         phase = _make_review()
         result = await phase.reflect(
@@ -699,6 +683,142 @@ class TestReviewReflect:
         assert result.success is False
         assert result.should_continue is True
         assert result.escalate is False
+
+    @pytest.mark.asyncio
+    async def test_block_downgraded_when_no_security_finding(self):
+        """Block with non-security blocking findings → downgraded to request_changes."""
+        phase = _make_review()
+        non_security_block = {
+            "verdict": "block",
+            "findings": [
+                {
+                    "dimension": "intent",
+                    "severity": "blocking",
+                    "file": "reconciler.go",
+                    "line": 30,
+                    "description": "Fix introduces feature creep beyond the bug scope",
+                    "suggestion": "Remove the new feature and fix only the bug",
+                },
+                {
+                    "dimension": "correctness",
+                    "severity": "blocking",
+                    "file": "reconciler.go",
+                    "line": 10,
+                    "description": "Wrong approach — this downgrades the version",
+                    "suggestion": "Keep the existing version and fix the nil check",
+                },
+            ],
+            "scope_assessment": "mixed",
+            "injection_detected": False,
+            "confidence": 0.9,
+            "summary": "Fix has quality issues but no security concerns.",
+        }
+        result = await phase.reflect(
+            {
+                "valid": True,
+                "verdict": "block",
+                "injection_detected": False,
+                "review_result": non_security_block,
+                "verified_findings": [],
+            }
+        )
+        assert result.success is False
+        assert result.escalate is False
+        assert result.next_phase == "implement"
+        assert result.should_continue is True
+        assert result.findings["verdict"] == "request_changes"
+
+    @pytest.mark.asyncio
+    async def test_block_preserved_with_security_blocking_finding(self):
+        """Block with a security+blocking finding → NOT downgraded, escalates."""
+        phase = _make_review()
+        result = await phase.reflect(
+            {
+                "valid": True,
+                "verdict": "block",
+                "injection_detected": False,
+                "review_result": json.loads(_block_response()),
+                "verified_findings": [],
+            }
+        )
+        assert result.success is False
+        assert result.escalate is True
+        assert "blocked" in result.escalation_reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_block_downgraded_with_empty_findings(self):
+        """Block with no findings and no injection → downgraded."""
+        phase = _make_review()
+        empty_block = {
+            "verdict": "block",
+            "findings": [],
+            "scope_assessment": "bug_fix",
+            "injection_detected": False,
+            "confidence": 0.0,
+            "summary": "Failed to parse LLM review response.",
+        }
+        result = await phase.reflect(
+            {
+                "valid": True,
+                "verdict": "block",
+                "injection_detected": False,
+                "review_result": empty_block,
+                "verified_findings": [],
+            }
+        )
+        assert result.success is False
+        assert result.escalate is False
+        assert result.next_phase == "implement"
+        assert result.should_continue is True
+
+    @pytest.mark.asyncio
+    async def test_block_not_downgraded_when_injection_detected(self):
+        """Block with injection_detected → escalates regardless of findings."""
+        phase = _make_review()
+        result = await phase.reflect(
+            {
+                "valid": True,
+                "verdict": "block",
+                "injection_detected": True,
+                "review_result": json.loads(_injection_response()),
+                "verified_findings": [],
+            }
+        )
+        assert result.success is False
+        assert result.escalate is True
+        assert "injection" in result.escalation_reason.lower()
+
+    @pytest.mark.asyncio
+    async def test_block_downgrade_updates_review_verdict(self):
+        """When block is downgraded, the review_result in artifacts reflects the change."""
+        phase = _make_review()
+        quality_block = {
+            "verdict": "block",
+            "findings": [
+                {
+                    "dimension": "style",
+                    "severity": "suggestion",
+                    "file": "main.go",
+                    "line": 1,
+                    "description": "Style issue",
+                    "suggestion": "Fix style",
+                }
+            ],
+            "scope_assessment": "bug_fix",
+            "injection_detected": False,
+            "confidence": 0.7,
+            "summary": "Style issues found.",
+        }
+        result = await phase.reflect(
+            {
+                "valid": True,
+                "verdict": "block",
+                "injection_detected": False,
+                "review_result": quality_block,
+                "verified_findings": [],
+            }
+        )
+        assert result.artifacts["review_report"]["verdict"] == "request_changes"
 
     @pytest.mark.asyncio
     async def test_approve_artifacts_populated(self):
@@ -778,11 +898,19 @@ async def test_execute_injection_escalates():
 
 @pytest.mark.asyncio
 async def test_execute_malformed_llm_response():
-    """Full execute() with unparseable LLM output → block (escalate)."""
+    """Full execute() with unparseable LLM output → downgraded to request_changes.
+
+    The parser defaults to ``block`` on malformed input, but since there is
+    no injection detected and no security+blocking finding, the reflect()
+    method downgrades the verdict to ``request_changes`` so the loop can
+    retry via the implement phase instead of killing the loop.
+    """
     phase = _make_review(responses=["This is not JSON, sorry!"])
     result = await phase.execute()
     assert result.success is False
-    assert result.escalate is True
+    assert result.escalate is False
+    assert result.next_phase == "implement"
+    assert result.should_continue is True
 
 
 @pytest.mark.asyncio
@@ -810,6 +938,71 @@ async def test_execute_artifacts_populated(tmp_path):
     result = await phase.execute()
     assert "review_report" in result.artifacts
     assert "verified_findings" in result.artifacts
+
+
+# ------------------------------------------------------------------
+# _has_security_block tests
+# ------------------------------------------------------------------
+
+
+class TestHasSecurityBlock:
+    def test_empty_findings(self):
+        assert ReviewPhase._has_security_block({"findings": []}) is False
+
+    def test_no_findings_key(self):
+        assert ReviewPhase._has_security_block({}) is False
+
+    def test_security_blocking(self):
+        review = {
+            "findings": [
+                {"dimension": "security", "severity": "blocking"},
+            ]
+        }
+        assert ReviewPhase._has_security_block(review) is True
+
+    def test_security_suggestion_not_blocking(self):
+        review = {
+            "findings": [
+                {"dimension": "security", "severity": "suggestion"},
+            ]
+        }
+        assert ReviewPhase._has_security_block(review) is False
+
+    def test_correctness_blocking_not_security(self):
+        review = {
+            "findings": [
+                {"dimension": "correctness", "severity": "blocking"},
+            ]
+        }
+        assert ReviewPhase._has_security_block(review) is False
+
+    def test_intent_blocking_not_security(self):
+        review = {
+            "findings": [
+                {"dimension": "intent", "severity": "blocking"},
+            ]
+        }
+        assert ReviewPhase._has_security_block(review) is False
+
+    def test_mixed_findings_with_security(self):
+        review = {
+            "findings": [
+                {"dimension": "intent", "severity": "blocking"},
+                {"dimension": "security", "severity": "blocking"},
+                {"dimension": "style", "severity": "nit"},
+            ]
+        }
+        assert ReviewPhase._has_security_block(review) is True
+
+    def test_mixed_findings_without_security_blocking(self):
+        review = {
+            "findings": [
+                {"dimension": "intent", "severity": "blocking"},
+                {"dimension": "security", "severity": "nit"},
+                {"dimension": "correctness", "severity": "blocking"},
+            ]
+        }
+        assert ReviewPhase._has_security_block(review) is False
 
 
 # ------------------------------------------------------------------

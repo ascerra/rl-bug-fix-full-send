@@ -36,18 +36,33 @@ def check_status_json() -> bool | None:
         return None
 
 
+_NON_ITEM_RE = re.compile(
+    r"^(CRITICAL|HIGH|MEDIUM|LOW)\s+—|^(Phase \d+ )?Build Order|^Timeline"
+)
+
+
 def check_implementation_plan() -> tuple[int, int]:
-    """Return (done, total) sub-phase items from IMPLEMENTATION-PLAN.md."""
+    """Return (done, total) sub-phase items from IMPLEMENTATION-PLAN.md.
+
+    Matches ### and #### headings that start with a digit (e.g. ``### 0.1``
+    or ``#### 7.3``).  Skips severity-group and organisational headings.
+    """
     if not IMPL_PLAN.exists():
         return 0, 0
     text = IMPL_PLAN.read_text()
     total = 0
     done = 0
     for line in text.splitlines():
-        if re.match(r"^### \d", line):
-            total += 1
-            if "✅" in line:
-                done += 1
+        if not re.match(r"^###+ ", line):
+            continue
+        stripped = line.lstrip("#").strip()
+        if _NON_ITEM_RE.match(stripped):
+            continue
+        if not re.match(r"\d", stripped):
+            continue
+        total += 1
+        if "✅" in line:
+            done += 1
     return done, total
 
 

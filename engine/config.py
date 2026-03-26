@@ -26,6 +26,8 @@ class LoopConfig:
     escalation_on_iteration_cap: str = "human"
     escalation_on_time_budget: str = "human"
     escalation_on_review_block_after: int = 3
+    retry_backoff_base_seconds: float = 1.0
+    retry_backoff_max_seconds: float = 4.0
 
 
 @dataclass
@@ -59,6 +61,9 @@ class ImplementPhaseConfig:
     max_inner_iterations: int = 5
     run_tests_after_each_edit: bool = True
     run_linters: bool = True
+    max_parse_retries: int = 1
+    test_command: str = ""
+    lint_command: str = ""
 
 
 @dataclass
@@ -77,6 +82,8 @@ class ValidatePhaseConfig:
     full_test_suite: bool = True
     ci_equivalent: bool = True
     minimal_diff_check: bool = True
+    test_command: str = ""
+    lint_command: str = ""
 
 
 @dataclass

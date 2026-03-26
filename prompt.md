@@ -22,5 +22,5 @@ After you finish the implementation for this run:
    - **Issues hit**: blockers, ambiguities, things that failed before working
    - **Next focus**: the single highest-priority item for the next run
 4. **Run `python scripts/gen-progress.py`** — regenerates the progress dashboard.
-5. **If ALL items in `IMPLEMENTATION-PLAN.md` are now ✅**: write `{"ralphComplete": true}` to `progress/status.json`.
+5. **If ALL items in `IMPLEMENTATION-PLAN.md` are now ✅** (including `####` sub-items in Phase 7 — check *every* numbered heading at `###` and `####` level, not just `###`): write `{"ralphComplete": true}` to `progress/status.json`. If any numbered item lacks ✅, do NOT write this file.
 6. **Final message**: list **what you shipped**, **test result**, and **next focus**.

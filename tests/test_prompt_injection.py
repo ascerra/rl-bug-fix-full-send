@@ -210,7 +210,9 @@ def _implement_response() -> str:
             "root_cause": "nil pointer dereference",
             "fix_description": "Added nil check",
             "files_changed": ["pkg/controller/reconciler.go"],
-            "file_changes": [],
+            "file_changes": [
+                {"path": "pkg/controller/reconciler.go", "content": "package controller\n"}
+            ],
             "test_added": "",
             "tests_passing": True,
             "linters_passing": True,

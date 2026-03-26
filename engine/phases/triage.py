@@ -14,6 +14,7 @@ import json
 from typing import Any, ClassVar
 
 from engine.phases.base import Phase, PhaseResult
+from engine.tools.test_runner import RepoStack, detect_repo_stack
 
 
 class TriagePhase(Phase):
@@ -27,6 +28,10 @@ class TriagePhase(Phase):
 
     name = "triage"
     allowed_tools: ClassVar[list[str]] = []
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._detected_stack: RepoStack | None = None
 
     async def observe(self) -> dict[str, Any]:
         """Gather issue data, repo file listing, and existing test files."""
@@ -45,6 +50,11 @@ class TriagePhase(Phase):
         }
 
         if not self.tool_executor:
+            self.logger.narrate(
+                f"Fetched issue '{issue.get('title', 'N/A')[:60]}'. "
+                f"Found {len(observation.get('repo_files', '').splitlines())} source files, "
+                f"{len(observation.get('test_files', '').splitlines())} test files."
+            )
             return observation
 
         tree = await self.tool_executor.execute(
@@ -52,12 +62,21 @@ class TriagePhase(Phase):
             command=(
                 "find . -type f "
                 "\\( -name '*.py' -o -name '*.go' -o -name '*.js' -o -name '*.ts' "
-                "-o -name '*.yaml' -o -name '*.yml' -o -name '*.rs' \\) "
+                "-o -name '*.yaml' -o -name '*.yml' -o -name '*.rs' "
+                "-o -name 'go.mod' -o -name 'Cargo.toml' -o -name 'package.json' "
+                "-o -name 'pyproject.toml' -o -name 'Makefile' \\) "
                 "| grep -v node_modules | grep -v __pycache__ | sort | head -200"
             ),
         )
         if tree.get("success"):
             observation["repo_files"] = tree["stdout"]
+
+        self._detected_stack = detect_repo_stack(observation.get("repo_files", ""))
+        self.logger.info(
+            f"Detected repo stack: {self._detected_stack.language} "
+            f"(from {self._detected_stack.detected_from}, "
+            f"confidence={self._detected_stack.confidence:.2f})"
+        )
 
         tests = await self.tool_executor.execute(
             "shell_run",
@@ -71,6 +90,11 @@ class TriagePhase(Phase):
         if tests.get("success"):
             observation["test_files"] = tests["stdout"]
 
+        self.logger.narrate(
+            f"Fetched issue '{issue.get('title', 'N/A')[:60]}'. "
+            f"Found {len(observation.get('repo_files', '').splitlines())} source files, "
+            f"{len(observation.get('test_files', '').splitlines())} test files."
+        )
         return observation
 
     async def plan(self, observation: dict[str, Any]) -> dict[str, Any]:
@@ -100,7 +124,7 @@ class TriagePhase(Phase):
             max_tokens=self.config.llm.max_tokens,
         )
 
-        self.tracer.record_llm_call(
+        self.record_llm_call(
             description="Triage classification",
             model=llm_response.model,
             provider=llm_response.provider,
@@ -112,6 +136,17 @@ class TriagePhase(Phase):
         )
 
         triage_result = parse_triage_response(llm_response.content)
+
+        classification = triage_result.get("classification", "unknown")
+        confidence_raw = triage_result.get("confidence", 0)
+        try:
+            confidence = float(confidence_raw)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        severity = triage_result.get("severity", "unknown")
+        self.logger.narrate(
+            f"Classified as {classification} (confidence: {confidence:.2f}, severity: {severity})."
+        )
 
         return {
             "triage_result": triage_result,
@@ -126,11 +161,37 @@ class TriagePhase(Phase):
         triage = plan.get("triage_result", {})
         actions: list[dict[str, Any]] = []
 
-        verified_components = await self._verify_components(
-            triage.get("affected_components", []), actions
-        )
+        components = triage.get("affected_components", [])
+        verified_components = await self._verify_components(components, actions)
+
+        found_count = sum(1 for v in verified_components if v.get("found"))
+        if found_count == 0 and self.tool_executor:
+            repo_files = plan.get("observation", {}).get("repo_files", "")
+            suggested = _suggest_components(
+                self.issue_data.get("title", ""),
+                self.issue_data.get("body", ""),
+                repo_files,
+            )
+            if suggested:
+                self.logger.info(
+                    f"LLM returned no valid components — suggesting {len(suggested)} "
+                    f"from repo structure: {suggested}"
+                )
+                triage["affected_components"] = suggested
+                verified_components = await self._verify_components(suggested, actions)
+                actions.append(
+                    {
+                        "action": "suggest_components",
+                        "suggested": suggested,
+                        "reason": "LLM returned empty or non-existent affected_components",
+                    }
+                )
 
         reproduction = await self._attempt_reproduction(plan, triage, actions)
+
+        n_verified = len(verified_components)
+        repro_status = "attempted" if reproduction.get("attempted") else "skipped"
+        self.logger.narrate(f"Verified {n_verified} components. Reproduction {repro_status}.")
 
         return {
             "triage_result": triage,
@@ -179,6 +240,7 @@ class TriagePhase(Phase):
         classification = validation.get("classification", "")
 
         if validation.get("injection_detected", False):
+            self.logger.narrate("ALERT: Prompt injection detected. Escalating.")
             return PhaseResult(
                 phase=self.name,
                 success=False,
@@ -189,6 +251,7 @@ class TriagePhase(Phase):
             )
 
         if classification == "feature":
+            self.logger.narrate("Issue classified as feature request. Escalating.")
             return PhaseResult(
                 phase=self.name,
                 success=False,
@@ -207,6 +270,13 @@ class TriagePhase(Phase):
                 self.logger.warn(
                     f"Ambiguous classification with confidence {confidence} — proceeding as bug"
                 )
+                try:
+                    conf_display = float(confidence)
+                except (TypeError, ValueError):
+                    conf_display = 0.0
+                self.logger.narrate(
+                    f"Ambiguous but confident enough ({conf_display:.2f}). Proceeding as bug."
+                )
                 return PhaseResult(
                     phase=self.name,
                     success=True,
@@ -219,6 +289,7 @@ class TriagePhase(Phase):
                         "verified_components": validation.get("verified_components", []),
                     },
                 )
+            self.logger.narrate("Ambiguous with low confidence. Escalating.")
             return PhaseResult(
                 phase=self.name,
                 success=False,
@@ -233,6 +304,9 @@ class TriagePhase(Phase):
 
         if not validation.get("valid", False):
             self.logger.warn(f"Triage validation issues: {validation.get('issues', [])}")
+            self.logger.narrate(
+                f"Triage validation issues: {len(validation.get('issues', []))} problems. Retrying."
+            )
             return PhaseResult(
                 phase=self.name,
                 success=False,
@@ -241,6 +315,7 @@ class TriagePhase(Phase):
             )
 
         if triage.get("recommendation") == "escalate":
+            self.logger.narrate("Triage recommends escalation.")
             return PhaseResult(
                 phase=self.name,
                 success=False,
@@ -252,6 +327,7 @@ class TriagePhase(Phase):
                 findings=triage,
             )
 
+        self.logger.narrate("Triage complete. Classified as bug. Moving to implement.")
         return PhaseResult(
             phase=self.name,
             success=True,
@@ -270,20 +346,44 @@ class TriagePhase(Phase):
     # ------------------------------------------------------------------
 
     async def _fetch_issue(self, issue_url: str) -> dict[str, Any]:
-        """Fetch issue title and body from GitHub using the gh CLI."""
-        import json as _json
+        """Fetch issue title and body from GitHub.
+
+        Tries the ``gh`` CLI first, then falls back to the GitHub REST API
+        via the ``github_api`` tool.  Returns ``{"url": ..., "title": "N/A",
+        "body": "N/A"}`` only when both methods fail.
+        """
         import re
 
         issue = {"url": issue_url, "title": "N/A", "body": "N/A"}
         match = re.search(r"github\.com/([^/]+/[^/]+)/issues/(\d+)", issue_url)
         if not match:
             self.logger.warn(f"Could not parse issue URL: {issue_url}")
+            self.logger.narrate("Could not parse issue URL — cannot fetch issue content.")
             return issue
 
         repo, number = match.group(1), match.group(2)
         if not self.tool_executor:
+            self.logger.narrate("No tool executor — skipping issue fetch.")
             return issue
 
+        fetched = await self._fetch_issue_gh_cli(repo, number, issue)
+        if not fetched:
+            fetched = await self._fetch_issue_api(repo, number, issue)
+
+        if issue["title"] == "N/A" and issue["body"] == "N/A":
+            self.logger.warn("Issue fetch failed via both gh CLI and GitHub API")
+            self.logger.narrate(
+                "WARNING: Could not fetch issue content from GitHub. "
+                "Triage will proceed with limited context."
+            )
+
+        return issue
+
+    async def _fetch_issue_gh_cli(self, repo: str, number: str, issue: dict[str, Any]) -> bool:
+        """Try fetching issue via ``gh issue view``.  Returns True on success."""
+        import json as _json
+
+        assert self.tool_executor is not None
         result = await self.tool_executor.execute(
             "shell_run",
             command=f"gh issue view {number} --repo {repo} --json title,body",
@@ -293,13 +393,53 @@ class TriagePhase(Phase):
                 data = _json.loads(result["stdout"])
                 issue["title"] = data.get("title", "N/A")
                 issue["body"] = data.get("body", "N/A")
-                self.logger.info(f"Fetched issue: {issue['title'][:80]}")
+                self.logger.info(f"Fetched issue via gh CLI: {issue['title'][:80]}")
+                return True
             except _json.JSONDecodeError:
                 self.logger.warn("Failed to parse gh issue JSON output")
         else:
-            self.logger.warn(f"Failed to fetch issue from GitHub: {result.get('stderr', '')}")
+            self.logger.warn(f"gh CLI issue fetch failed: {result.get('stderr', '')[:200]}")
+        return False
 
-        return issue
+    async def _fetch_issue_api(self, repo: str, number: str, issue: dict[str, Any]) -> bool:
+        """Fallback: fetch issue via GitHub REST API.  Returns True on success."""
+        assert self.tool_executor is not None
+        if "github_api" not in self.tool_executor.available_tools:
+            result = await self.tool_executor.execute(
+                "shell_run",
+                command=(
+                    f"curl -sf -H 'Accept: application/vnd.github+json' "
+                    f"https://api.github.com/repos/{repo}/issues/{number}"
+                ),
+            )
+            if result.get("success") and result.get("stdout", "").strip():
+                import json as _json
+
+                try:
+                    data = _json.loads(result["stdout"])
+                    issue["title"] = data.get("title", "N/A")
+                    issue["body"] = data.get("body", "N/A")
+                    self.logger.info(f"Fetched issue via curl fallback: {issue['title'][:80]}")
+                    return True
+                except _json.JSONDecodeError:
+                    self.logger.warn("Failed to parse curl issue JSON output")
+            else:
+                self.logger.warn("curl GitHub API fallback also failed")
+            return False
+
+        result = await self.tool_executor.execute(
+            "github_api",
+            endpoint=f"/repos/{repo}/issues/{number}",
+        )
+        if result.get("success") and isinstance(result.get("body"), dict):
+            data = result["body"]
+            issue["title"] = data.get("title", "N/A")
+            issue["body"] = data.get("body", "N/A")
+            self.logger.info(f"Fetched issue via GitHub API: {issue['title'][:80]}")
+            return True
+
+        self.logger.warn("GitHub API issue fetch also failed")
+        return False
 
     async def _verify_components(
         self,
@@ -337,15 +477,13 @@ class TriagePhase(Phase):
         if not targets:
             return {"attempted": False, "reason": "No test files found"}
 
-        result = await self.tool_executor.execute(
-            "shell_run",
-            command=(
-                "python -m pytest --tb=short -q 2>&1 "
-                "|| go test ./... 2>&1 "
-                "|| echo 'No test runner detected'"
-            ),
-            timeout=120,
+        cmd = (
+            self._detected_stack.test_command
+            if self._detected_stack
+            else "echo 'No test runner detected'"
         )
+
+        result = await self.tool_executor.execute("shell_run", command=cmd, timeout=120)
         reproduction = {
             "attempted": True,
             "tests_targeted": targets,
@@ -354,6 +492,146 @@ class TriagePhase(Phase):
         }
         actions.append({"action": "run_tests", "success": result.get("success", False)})
         return reproduction
+
+
+_TRIAGE_STOPWORDS: set[str] = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "when",
+    "have",
+    "been",
+    "does",
+    "not",
+    "are",
+    "was",
+    "were",
+    "but",
+    "they",
+    "will",
+    "can",
+    "should",
+    "would",
+    "could",
+    "about",
+    "into",
+    "more",
+    "some",
+    "than",
+    "then",
+    "also",
+    "just",
+    "only",
+    "each",
+    "other",
+    "after",
+    "before",
+    "between",
+    "through",
+    "error",
+    "issue",
+    "bug",
+    "fix",
+    "none",
+    "null",
+    "true",
+    "false",
+    "test",
+    "tests",
+    "file",
+    "files",
+    "code",
+    "line",
+    "please",
+    "make",
+    "like",
+    "need",
+    "want",
+    "using",
+    "used",
+    "expected",
+    "actual",
+    "result",
+    "fails",
+    "failed",
+}
+
+
+def _suggest_components(
+    title: str,
+    body: str,
+    repo_files: str,
+    max_results: int = 5,
+) -> list[str]:
+    """Suggest affected component file paths by matching issue keywords to repo files.
+
+    Extracts meaningful keywords from the issue title and body, then scores each
+    repo file by keyword match density. Returns up to ``max_results`` file paths,
+    preferring source files over test files.
+    """
+    keywords = _extract_triage_keywords(title, body)
+    if not keywords:
+        return []
+
+    file_list = [f.strip() for f in repo_files.strip().splitlines() if f.strip()]
+    if not file_list:
+        return []
+
+    scored: list[tuple[str, float]] = []
+    for fpath in file_list:
+        lower_path = fpath.lower()
+        score = 0.0
+        for kw in keywords:
+            if kw in lower_path:
+                score += 1.0
+                parts = lower_path.rsplit("/", 1)
+                if len(parts) == 2 and kw in parts[1]:
+                    score += 0.5
+
+        if score > 0:
+            is_test = any(
+                marker in lower_path
+                for marker in ("_test.", "test_", ".test.", ".spec.", "/tests/", "/test/")
+            )
+            if is_test:
+                score *= 0.5
+            scored.append((fpath, score))
+
+    scored.sort(key=lambda x: x[1], reverse=True)
+    return [fpath for fpath, _ in scored[:max_results]]
+
+
+def _extract_triage_keywords(
+    title: str,
+    body: str,
+    min_len: int = 3,
+    max_keywords: int = 10,
+) -> list[str]:
+    """Extract meaningful lowercase keywords from issue title and body for file matching."""
+    keywords: list[str] = []
+    seen: set[str] = set()
+
+    for text in [title, body[:500]]:
+        for word in text.split():
+            if len(keywords) >= max_keywords:
+                break
+            cleaned = word.strip(".,;:!?()[]{}\"'`#*-_/\\")
+            lower = cleaned.lower()
+            if (
+                len(lower) >= min_len
+                and lower.replace("-", "").replace("_", "").isalnum()
+                and lower not in _TRIAGE_STOPWORDS
+                and lower not in seen
+                and lower != "n/a"
+            ):
+                seen.add(lower)
+                keywords.append(lower)
+
+    return keywords
 
 
 def parse_triage_response(content: str) -> dict[str, Any]:

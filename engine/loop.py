@@ -6,6 +6,7 @@ Manages phase transitions, iteration caps, time budgets, and escalation.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -94,6 +95,7 @@ class RalphLoop:
 
         self.logger = StructuredLogger(
             output_path=self.output_dir / "log.json",
+            progress_path=self.output_dir / "progress.md",
             redactor=redactor,
         )
         self.tracer = Tracer(redactor=redactor)
@@ -105,6 +107,7 @@ class RalphLoop:
 
         self._start_time: float = 0
         self._total_iterations: int = 0
+        self._consecutive_retries: int = 0
 
     def register_phase(self, name: str, phase_class: type[Phase]) -> None:
         """Register a phase implementation by name."""
@@ -128,6 +131,13 @@ class RalphLoop:
             f"Time budget: {self.config.loop.time_budget_minutes}m"
         )
 
+        self.logger.write_progress_heading("# Ralph Loop Progress")
+        self.logger.narrate(
+            f"Starting Ralph Loop for {self.issue_url} "
+            f"(max {self.config.loop.max_iterations} iterations, "
+            f"{self.config.loop.time_budget_minutes}m budget)"
+        )
+
         if self._monitor:
             self.logger.info(
                 f"Self-monitoring active: {self._monitor.run_url}",
@@ -145,12 +155,17 @@ class RalphLoop:
         while current_phase_idx < len(PHASE_ORDER):
             if self._check_time_budget():
                 self.logger.warn("Time budget exceeded — escalating to human")
+                self.logger.narrate("Time budget exceeded. Escalating to human review.")
                 status = "timeout"
                 self._record_escalation("Time budget exceeded", phase_results)
                 break
 
             if self._total_iterations >= self.config.loop.max_iterations:
                 self.logger.warn("Iteration cap reached — escalating to human")
+                self.logger.narrate(
+                    f"Iteration cap ({self.config.loop.max_iterations}) reached. "
+                    "Escalating to human review."
+                )
                 status = "escalated"
                 self._record_escalation("Iteration cap reached", phase_results)
                 break
@@ -174,6 +189,11 @@ class RalphLoop:
             self.logger.set_iteration(self._total_iterations)
             self.tracer.set_iteration(self._total_iterations)
             self.metrics.record_iteration(phase_name)
+
+            self.logger.write_progress_heading(
+                f"## Iteration {self._total_iterations} — {phase_name}"
+            )
+            self.logger.narrate(f"Starting {phase_name} phase (iteration {self._total_iterations})")
 
             iteration_started = datetime.now(UTC).isoformat()
             phase_start = time.monotonic()
@@ -203,12 +223,18 @@ class RalphLoop:
             )
             phase_results.append(result)
 
+            elapsed_min = (time.monotonic() - self._start_time) / 60
+            self.logger.narrate(
+                f"Phase {phase_name} "
+                f"{'succeeded' if result.success else 'failed'} "
+                f"({phase_duration_ms:.0f}ms, {elapsed_min:.1f}m elapsed)"
+            )
+
             if result.escalate:
+                reason = result.escalation_reason or f"Escalated during {phase_name}"
+                self.logger.narrate(f"ESCALATION: {reason[:200]}")
                 status = "escalated"
-                self._record_escalation(
-                    result.escalation_reason or f"Escalated during {phase_name}",
-                    phase_results,
-                )
+                self._record_escalation(reason, phase_results)
                 break
 
             if not result.success and not result.should_continue:
@@ -228,20 +254,49 @@ class RalphLoop:
                                 f"Review rejected {review_rejections} times "
                                 f"(threshold={threshold}) — escalating"
                             )
+                            self.logger.narrate(
+                                f"Review rejected {review_rejections} times "
+                                f"(limit {threshold}). Escalating to human."
+                            )
                             status = "escalated"
                             self._record_escalation(
                                 f"Review blocked after {review_rejections} rejections",
                                 phase_results,
                             )
                             break
-                    self.logger.info(f"Phase transition: {phase_name} → {result.next_phase}")
+                    if target_idx <= current_phase_idx:
+                        self._consecutive_retries += 1
+                        delay = self._compute_backoff_delay()
+                        self.logger.info(
+                            f"Phase transition: {phase_name} → {result.next_phase} "
+                            f"(backoff {delay:.1f}s)"
+                        )
+                        self.logger.narrate(
+                            f"Transitioning: {phase_name} → {result.next_phase} "
+                            f"(backing off {delay:.1f}s)"
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        self._consecutive_retries = 0
+                        self.logger.info(f"Phase transition: {phase_name} → {result.next_phase}")
+                        self.logger.narrate(f"Transitioning: {phase_name} → {result.next_phase}")
                     current_phase_idx = target_idx
                     continue
 
             if result.success:
                 current_phase_idx += 1
+                self._consecutive_retries = 0
             else:
-                self.logger.info(f"Phase {phase_name} failed but retryable — retrying")
+                self._consecutive_retries += 1
+                delay = self._compute_backoff_delay()
+                self.logger.info(
+                    f"Phase {phase_name} failed but retryable — retrying after {delay:.1f}s backoff"
+                )
+                self.logger.narrate(
+                    f"Phase {phase_name} failed but retryable "
+                    f"— backing off {delay:.1f}s before retry."
+                )
+                await asyncio.sleep(delay)
 
         self.execution.completed_at = datetime.now(UTC).isoformat()
         self.execution.result = {
@@ -256,6 +311,12 @@ class RalphLoop:
         self.execution.actions = self.tracer.get_actions_as_dicts()
 
         self._write_outputs(status)
+
+        total_min = (time.monotonic() - self._start_time) / 60
+        self.logger.narrate(
+            f"Ralph Loop complete: status={status}, "
+            f"{self._total_iterations} iterations, {total_min:.1f}m elapsed"
+        )
         self.logger.info(
             f"Ralph Loop complete: status={status}, iterations={self._total_iterations}"
         )
@@ -295,15 +356,21 @@ class RalphLoop:
                 redactor=self._redactor,
             )
 
+            issue_data: dict[str, Any] = {"url": self.issue_url}
+            if phase_name == "report":
+                issue_data["_execution_snapshot"] = self.execution.to_dict()
+                issue_data["_output_dir"] = str(self.output_dir)
+
             phase = phase_cls(
                 llm=self.llm,
                 logger=self.logger,
                 tracer=self.tracer,
                 repo_path=self.repo_path,
-                issue_data={"url": self.issue_url},
+                issue_data=issue_data,
                 prior_phase_results=prior_results,
                 tool_executor=tool_executor,
                 config=self.config,
+                metrics=self.metrics,
             )
 
             self.logger.info(f"Executing phase: {phase_name}")
@@ -352,6 +419,13 @@ class RalphLoop:
         )
         self.logger.warn(f"ESCALATION: {reason}")
 
+    def _compute_backoff_delay(self) -> float:
+        """Compute exponential backoff delay: base * 2^(retries-1), capped at max."""
+        base = self.config.loop.retry_backoff_base_seconds
+        cap = self.config.loop.retry_backoff_max_seconds
+        exponent = max(0, self._consecutive_retries - 1)
+        return min(base * (2**exponent), cap)
+
     def _check_time_budget(self) -> bool:
         """Check if the time budget has been exceeded."""
         elapsed_minutes = (time.monotonic() - self._start_time) / 60
@@ -387,9 +461,16 @@ class RalphLoop:
     def _publish_reports(self) -> None:
         """Generate visual reports from the execution record.
 
-        Runs the ReportPublisher if the visualization module is available.
+        Skipped when the ReportPhase already published successfully (avoids
+        double generation).  Otherwise runs the ReportPublisher as a fallback.
         Failures are logged but never block loop completion.
         """
+        for it in self.execution.iterations:
+            if it.get("phase") == "report" and it.get("result", {}).get("success"):
+                artifacts = it.get("artifacts", {})
+                if artifacts.get("files_generated"):
+                    self.logger.debug("Reports already published by report phase — skipping")
+                    return
         try:
             from engine.visualization.publisher import ReportPublisher
 
@@ -429,8 +510,13 @@ def _truncate_dict(d: dict[str, Any], max_str_len: int = 2000) -> dict[str, Any]
             out[k] = _truncate_dict(v, max_str_len)
         elif isinstance(v, list):
             out[k] = [
-                _truncate_dict(item, max_str_len) if isinstance(item, dict)
-                else (item[:max_str_len] + f"... [truncated]" if isinstance(item, str) and len(item) > max_str_len else item)
+                _truncate_dict(item, max_str_len)
+                if isinstance(item, dict)
+                else (
+                    item[:max_str_len] + "... [truncated]"
+                    if isinstance(item, str) and len(item) > max_str_len
+                    else item
+                )
                 for item in v
             ]
         else:

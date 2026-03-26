@@ -45,6 +45,18 @@ def parse_run_log() -> list[dict]:
     return runs
 
 
+def _is_non_item_heading(line: str) -> bool:
+    """Detect headings that are organizational groupings, not trackable items."""
+    stripped = line.lstrip("#").strip()
+    if re.match(r"(CRITICAL|HIGH|MEDIUM|LOW)\s+—", stripped):
+        return True
+    if re.match(r"(Phase \d+ )?Build Order", stripped):
+        return True
+    if re.match(r"Timeline", stripped):
+        return True
+    return False
+
+
 def parse_phases() -> list[dict]:
     if not IMPL_PLAN.exists():
         return []
@@ -56,7 +68,9 @@ def parse_phases() -> list[dict]:
             if current_phase:
                 phases.append(current_phase)
             current_phase = {"name": line.lstrip("#").strip(), "items": [], "done": 0, "total": 0}
-        elif current_phase and re.match(r"^### ", line):
+        elif current_phase and re.match(r"^###+ ", line):
+            if _is_non_item_heading(line):
+                continue
             item_name = line.lstrip("#").strip()
             done = "✅" in item_name
             current_phase["items"].append({"name": item_name.replace("✅", "").strip(), "done": done})
@@ -75,7 +89,7 @@ def get_test_status() -> str:
             capture_output=True,
             text=True,
             cwd=ROOT,
-            timeout=30,
+            timeout=120,
         )
         last_line = [l for l in result.stdout.strip().splitlines() if l.strip()][-1]
         return last_line

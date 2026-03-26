@@ -160,7 +160,12 @@ class GoldenPrinciplesChecker:
                     )
 
     def _check_llm_provenance(self) -> None:
-        """P8: Every self.llm.complete() call must be paired with self.tracer.record_llm_call()."""
+        """P8: Every self.llm.complete() call must be paired with a record_llm_call().
+
+        Accepts both ``self.tracer.record_llm_call()`` (legacy direct call)
+        and ``self.record_llm_call()`` (preferred helper that also updates
+        LoopMetrics counters).
+        """
         phases_dir = self.engine_path / "phases"
         if not phases_dir.is_dir():
             return
@@ -180,7 +185,9 @@ class GoldenPrinciplesChecker:
                     continue
 
                 llm_count = _count_attr_calls(node, "self", "llm", "complete")
-                trace_count = _count_attr_calls(node, "self", "tracer", "record_llm_call")
+                tracer_count = _count_attr_calls(node, "self", "tracer", "record_llm_call")
+                helper_count = _count_method_calls(node, "self", "record_llm_call")
+                trace_count = tracer_count + helper_count
 
                 self._result.checks_run += 1
                 if llm_count > 0 and trace_count < llm_count:
@@ -192,7 +199,7 @@ class GoldenPrinciplesChecker:
                             code="GP008",
                             message=(
                                 f"Class '{node.name}' has {llm_count} llm.complete() "
-                                f"call(s) but only {trace_count} tracer.record_llm_call() — "
+                                f"call(s) but only {trace_count} record_llm_call() — "
                                 f"every LLM call must record provenance"
                             ),
                         )
@@ -518,6 +525,31 @@ def _count_attr_calls(
             continue
         value = func.value
         if _is_dotted_access(value, obj_name, attr_name):
+            count += 1
+    return count
+
+
+def _count_method_calls(
+    class_node: ast.ClassDef,
+    obj_name: str,
+    method_name: str,
+) -> int:
+    """Count how many times obj_name.method_name(...) is called in a class.
+
+    Unlike ``_count_attr_calls`` which matches ``obj.attr.method()``, this
+    matches a single-level attribute call like ``self.record_llm_call()``.
+    """
+    count = 0
+    for child in ast.walk(class_node):
+        if not isinstance(child, ast.Call):
+            continue
+        func = child.func
+        if not isinstance(func, ast.Attribute):
+            continue
+        if func.attr != method_name:
+            continue
+        value = func.value
+        if isinstance(value, ast.Name) and value.id == obj_name:
             count += 1
     return count
 
