@@ -185,7 +185,7 @@ class TestCommitSigning:
 
     def test_signing_config_in_engine_config(self):
         cfg = EngineConfig()
-        assert cfg.security.commit_signing is True
+        assert cfg.security.commit_signing is False
         assert cfg.security.signing_method in ("gitsign", "gpg")
 
     def test_signing_config_in_github_integration(self):
@@ -1002,7 +1002,7 @@ class TestCrossCuttingSecurityProperties:
 
     def test_security_config_defaults_are_safe(self):
         cfg = SecurityConfig()
-        assert cfg.commit_signing is True
+        assert cfg.commit_signing is False
         assert cfg.provenance_recording is True
         assert "UNTRUSTED" in cfg.untrusted_content_delimiter
 

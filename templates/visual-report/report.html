@@ -480,6 +480,48 @@
 <div class="card empty-state">No iterations recorded.</div>
 {% endif %}
 
+<!-- LLM Inference Log -->
+<h2>LLM Inference Log ({{ report.transcript_calls|length }} calls)</h2>
+{% if report.transcript_calls %}
+<p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:1rem">
+  Every LLM call with full system prompt, user message, and model response.
+  Click any call to expand.
+</p>
+{% for call in report.transcript_calls %}
+{% set phase_colors = {'triage': '#1f3a5f', 'implement': '#1a3a1a', 'review': '#3a2a0a', 'validate': '#2a1a3a', 'report': '#1a2a2a'} %}
+{% set phase_text = {'triage': 'var(--accent)', 'implement': 'var(--success)', 'review': 'var(--warning)', 'validate': 'var(--escalated)', 'report': '#56d4dd'} %}
+<details style="margin-bottom:0.75rem">
+  <summary style="display:flex;align-items:center;gap:0.5rem;flex-wrap:wrap;padding:0.6rem 0.75rem">
+    <span style="background:var(--accent);color:#0d1117;border-radius:4px;padding:1px 7px;font-weight:700;font-size:0.75rem;min-width:22px;text-align:center">#{{ loop.index }}</span>
+    <span style="background:{{ phase_colors.get(call.get('phase',''), '#2a2a2a') }};color:{{ phase_text.get(call.get('phase',''), 'var(--text-muted)') }};border-radius:4px;padding:1px 7px;font-size:0.7rem;font-weight:600;text-transform:uppercase">{{ call.get('phase', '?') }}</span>
+    <span style="flex:1;font-weight:500">{{ call.get('description', 'LLM call') }}</span>
+    <span style="background:var(--bg);border:1px solid var(--border);border-radius:10px;padding:0 7px;font-size:0.72rem;color:var(--text-muted)">{{ call.get('tokens_in', 0) }}&#x21A6;{{ call.get('tokens_out', 0) }} tok</span>
+    <span class="timeline-time">{{ call.get('model', '') }} · {{ call.get('latency_ms', 0)|format_duration }} · iter {{ call.get('iteration', '?') }}</span>
+  </summary>
+  <div class="detail-content" style="padding:0">
+    {% if call.get('system_prompt') %}
+    <div style="padding:0.75rem 1rem;border-bottom:1px solid var(--border)">
+      <div class="detail-section-title" style="margin-bottom:0.4rem">System Prompt ({{ call.system_prompt|length|string + ' chars' }})</div>
+      <div class="detail-code-block" style="max-height:300px">{{ call.system_prompt }}</div>
+    </div>
+    {% endif %}
+    {% if call.get('user_message') %}
+    <div style="padding:0.75rem 1rem;border-bottom:1px solid var(--border)">
+      <div class="detail-section-title" style="margin-bottom:0.4rem">User Message ({{ call.user_message|length|string + ' chars' }})</div>
+      <div class="detail-code-block" style="max-height:400px">{{ call.user_message }}</div>
+    </div>
+    {% endif %}
+    <div style="padding:0.75rem 1rem">
+      <div class="detail-section-title" style="margin-bottom:0.4rem;color:var(--success)">LLM Response ({{ call.get('response', '')|length|string + ' chars' }})</div>
+      <div class="detail-code-block" style="max-height:500px;border-color:rgba(63,185,80,0.3)">{{ call.get('response', '') }}</div>
+    </div>
+  </div>
+</details>
+{% endfor %}
+{% else %}
+<div class="card empty-state">No LLM transcript data available. Ensure TranscriptWriter is enabled.</div>
+{% endif %}
+
 <!-- Actions Log -->
 <h2>Actions Log ({{ report.actions|length }})</h2>
 {% if report.actions %}
@@ -494,11 +536,17 @@
   <div class="detail-content">
     {% if action.get('action_type') == 'llm_query' %}
       <p style="margin-bottom:0.5rem">Asked the AI model to: <strong>{{ action.get('input', {}).get('description', 'No description') }}</strong></p>
-      {% if action.get('provenance', {}).get('model') %}
-      <p style="color:var(--text-muted);font-size:0.85rem">Model: {{ action.provenance.model }}{% if action.provenance.get('provider') %} via {{ action.provenance.provider }}{% endif %}</p>
-      {% endif %}
-      {% if action.get('llm_context', {}).get('tokens_in') or action.get('llm_context', {}).get('tokens_out') %}
-      <p style="color:var(--text-muted);font-size:0.85rem">{{ action.get('llm_context', {}).get('tokens_in', 0) }} tokens in · {{ action.get('llm_context', {}).get('tokens_out', 0) }} tokens out</p>
+      {% set llm_ctx = action.get('llm_context', {}) %}
+      <p style="color:var(--text-muted);font-size:0.85rem">
+        Model: {{ llm_ctx.get('model', '?') }} via {{ llm_ctx.get('provider', '?') }}
+        | {{ llm_ctx.get('tokens_in', 0) }} tokens in · {{ llm_ctx.get('tokens_out', 0) }} tokens out
+        {% if action.get('duration_ms') %} | {{ action.duration_ms|format_duration }}{% endif %}
+      </p>
+      {% if llm_ctx.get('response_summary') %}
+      <div class="detail-section" style="margin-top:0.75rem">
+        <div class="detail-section-title">Response Summary</div>
+        <div class="detail-code-block">{{ llm_ctx.response_summary }}</div>
+      </div>
       {% endif %}
     {% elif action.get('action_type') == 'escalation' %}
       <p style="color:var(--failure);font-weight:600;margin-bottom:0.5rem">Agent escalated this issue for human review.</p>

@@ -6,10 +6,42 @@ Provider is selected via configuration and is swappable without changing loop lo
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import sys
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
+
+_TRANSIENT_PATTERNS = (
+    "disconnected",
+    "unavailable",
+    "reset",
+    "timeout",
+    "timed out",
+    "rate limit",
+    "rate_limit",
+    "resource exhausted",
+    "too many requests",
+    "internal server error",
+    "bad gateway",
+    "service unavailable",
+    "gateway timeout",
+    "broken pipe",
+    "server error",
+)
+
+_MAX_RETRIES = 3
+_RETRY_BASE_SECONDS = 2.0
+_RETRY_MAX_SECONDS = 30.0
+
+
+def _is_transient_error(exc: Exception) -> bool:
+    """Return True if the exception looks like a transient/retryable error."""
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+    msg = str(exc).lower()
+    return any(pattern in msg for pattern in _TRANSIENT_PATTERNS)
 
 
 @dataclass
@@ -129,11 +161,27 @@ class GeminiProvider:
         if json_mode:
             config["response_mime_type"] = "application/json"
 
-        response = self._client.models.generate_content(
-            model=self.model,
-            contents=contents,
-            config=config,
-        )
+        response = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = self._client.models.generate_content(
+                    model=self.model,
+                    contents=contents,
+                    config=config,
+                )
+                break
+            except Exception as exc:
+                if not _is_transient_error(exc) or attempt == _MAX_RETRIES:
+                    raise
+                delay = min(_RETRY_BASE_SECONDS * (2**attempt), _RETRY_MAX_SECONDS)
+                print(
+                    f">>> [GEMINI] Transient error (attempt {attempt + 1}/{_MAX_RETRIES + 1}): "
+                    f"{exc}. Retrying in {delay:.1f}s...",
+                    file=sys.stderr,
+                )
+                await asyncio.sleep(delay)
+
+        assert response is not None
 
         elapsed = (time.monotonic() - start) * 1000
 
@@ -142,8 +190,6 @@ class GeminiProvider:
             text = response.text or ""
 
         if not text:
-            import sys
-
             candidates = getattr(response, "candidates", None)
             if candidates:
                 candidate = candidates[0]
@@ -221,13 +267,29 @@ class AnthropicProvider:
             {"role": msg.get("role", "user"), "content": msg["content"]} for msg in messages
         ]
 
-        response = await self._client.messages.create(
-            model=self.model,
-            system=system_prompt,
-            messages=formatted_messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        response = None
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                response = await self._client.messages.create(
+                    model=self.model,
+                    system=system_prompt,
+                    messages=formatted_messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                break
+            except Exception as exc:
+                if not _is_transient_error(exc) or attempt == _MAX_RETRIES:
+                    raise
+                delay = min(_RETRY_BASE_SECONDS * (2**attempt), _RETRY_MAX_SECONDS)
+                print(
+                    f">>> [ANTHROPIC] Transient error (attempt {attempt + 1}/{_MAX_RETRIES + 1}): "
+                    f"{exc}. Retrying in {delay:.1f}s...",
+                    file=sys.stderr,
+                )
+                await asyncio.sleep(delay)
+
+        assert response is not None
 
         elapsed = (time.monotonic() - start) * 1000
         text = response.content[0].text if response.content else ""

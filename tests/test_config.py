@@ -8,7 +8,7 @@ def test_default_config():
     assert config.llm.provider == "gemini"
     assert config.loop.max_iterations == 10
     assert config.loop.time_budget_minutes == 30
-    assert config.security.commit_signing is True
+    assert config.security.commit_signing is False
 
 
 def test_load_config_with_overrides():

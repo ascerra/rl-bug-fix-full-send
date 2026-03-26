@@ -71,11 +71,16 @@ class ReportPublisher:
     def config(self) -> ReportingConfig:
         return self._config
 
-    def publish(self, execution: dict[str, Any]) -> PublishResult:
+    def publish(
+        self,
+        execution: dict[str, Any],
+        transcript_calls: list[dict[str, Any]] | None = None,
+    ) -> PublishResult:
         """Generate and write all reports for an execution record.
 
         Args:
             execution: Raw execution record dict (from execution.json or loop output).
+            transcript_calls: Full LLM call records for the inference log.
 
         Returns:
             PublishResult with paths to all generated files.
@@ -83,7 +88,7 @@ class ReportPublisher:
         result = PublishResult(report_dir=str(self._output_dir))
         self._output_dir.mkdir(parents=True, exist_ok=True)
 
-        result = self._generate_html_report(execution, result)
+        result = self._generate_html_report(execution, result, transcript_calls)
         result = self._generate_summary(execution, result)
         result = self._write_manifest(execution, result)
 
@@ -91,6 +96,9 @@ class ReportPublisher:
 
     def publish_from_file(self, execution_json_path: str | Path) -> PublishResult:
         """Publish reports from an execution.json file.
+
+        Automatically loads ``transcript-calls.json`` from the sibling
+        ``transcripts/`` directory if present.
 
         Args:
             execution_json_path: Path to execution.json.
@@ -106,15 +114,29 @@ class ReportPublisher:
         if not path.exists():
             raise FileNotFoundError(f"Execution file not found: {path}")
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return self.publish(raw)
+
+        transcript_calls: list[dict[str, Any]] | None = None
+        transcript_path = path.parent / "transcripts" / "transcript-calls.json"
+        if transcript_path.exists():
+            try:
+                transcript_calls = json.loads(transcript_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        return self.publish(raw, transcript_calls=transcript_calls)
 
     def _generate_html_report(
-        self, execution: dict[str, Any], result: PublishResult
+        self,
+        execution: dict[str, Any],
+        result: PublishResult,
+        transcript_calls: list[dict[str, Any]] | None = None,
     ) -> PublishResult:
         """Generate main HTML report."""
         try:
             report_path = self._output_dir / "report.html"
-            self._generator.generate(execution, output_path=report_path)
+            self._generator.generate(
+                execution, output_path=report_path, transcript_calls=transcript_calls,
+            )
             result.report_path = str(report_path)
             result.files_generated.append(str(report_path))
         except Exception as exc:

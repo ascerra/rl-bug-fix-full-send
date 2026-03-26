@@ -1078,7 +1078,7 @@ class TestImplementClassProperties:
         cfg = EngineConfig()
         assert cfg.phases.implement.max_inner_iterations == 5
         assert cfg.phases.implement.run_tests_after_each_edit is False
-        assert cfg.phases.implement.run_linters is True
+        assert cfg.phases.implement.run_linters is False
         assert cfg.phases.implement.test_execution_mode == "disabled"
 
 

@@ -42,6 +42,7 @@ class ReportData:
     action_map: dict[str, Any] = field(default_factory=dict)
     comparison: dict[str, Any] = field(default_factory=dict)
     narrative: str = ""
+    transcript_calls: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -63,14 +64,19 @@ class ReportData:
             "action_map": self.action_map,
             "comparison": self.comparison,
             "narrative": self.narrative,
+            "transcript_calls": self.transcript_calls,
         }
 
 
-def extract_report_data(execution: dict[str, Any]) -> ReportData:
+def extract_report_data(
+    execution: dict[str, Any],
+    transcript_calls: list[dict[str, Any]] | None = None,
+) -> ReportData:
     """Extract structured ReportData from a raw execution record dict.
 
     Accepts the full execution.json structure (with top-level "execution" key)
-    or a flat execution dict.
+    or a flat execution dict.  ``transcript_calls`` is the list of LLM call
+    records from ``transcript-calls.json`` (full prompts and responses).
     """
     exec_data = execution.get("execution", execution)
 
@@ -108,6 +114,7 @@ def extract_report_data(execution: dict[str, Any]) -> ReportData:
         action_map=action_map.to_dict(),
         comparison=comparison.to_dict(),
         narrative=narrative,
+        transcript_calls=transcript_calls or [],
     )
 
 
@@ -192,6 +199,7 @@ class ReportGenerator:
         execution: dict[str, Any],
         output_path: Path | str | None = None,
         template_name: str = "report.html",
+        transcript_calls: list[dict[str, Any]] | None = None,
     ) -> str:
         """Generate an HTML report from an execution record.
 
@@ -199,11 +207,12 @@ class ReportGenerator:
             execution: Raw execution record dict (from execution.json).
             output_path: If provided, write the HTML to this file path.
             template_name: Jinja2 template to render. Defaults to "report.html".
+            transcript_calls: Full LLM call records (from transcript-calls.json).
 
         Returns:
             The rendered HTML string.
         """
-        report_data = extract_report_data(execution)
+        report_data = extract_report_data(execution, transcript_calls=transcript_calls)
         html = self._render(report_data, template_name)
 
         if output_path:
@@ -221,6 +230,10 @@ class ReportGenerator:
     ) -> str:
         """Generate an HTML report from an execution.json file.
 
+        Automatically loads ``transcript-calls.json`` from the sibling
+        ``transcripts/`` directory if it exists, so that the report includes
+        full LLM inference content.
+
         Args:
             execution_json_path: Path to execution.json.
             output_path: If provided, write the HTML to this file path.
@@ -235,7 +248,21 @@ class ReportGenerator:
         """
         path = Path(execution_json_path)
         raw = json.loads(path.read_text(encoding="utf-8"))
-        return self.generate(raw, output_path=output_path, template_name=template_name)
+
+        transcript_calls: list[dict[str, Any]] | None = None
+        transcript_path = path.parent / "transcripts" / "transcript-calls.json"
+        if transcript_path.exists():
+            try:
+                transcript_calls = json.loads(transcript_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        return self.generate(
+            raw,
+            output_path=output_path,
+            template_name=template_name,
+            transcript_calls=transcript_calls,
+        )
 
     def available_templates(self) -> list[str]:
         """List available template files in the templates directory."""

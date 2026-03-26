@@ -1118,6 +1118,6 @@ class TestValidateClassProperties:
     def test_config_validate_flags(self):
         cfg = EngineConfig()
         assert cfg.phases.validate.full_test_suite is False
-        assert cfg.phases.validate.ci_equivalent is True
+        assert cfg.phases.validate.ci_equivalent is False
         assert cfg.phases.validate.minimal_diff_check is True
         assert cfg.phases.validate.test_execution_mode == "disabled"

@@ -315,8 +315,9 @@ class RalphLoop:
         self.execution.metrics = self.metrics.to_dict()
         self.execution.actions = self.tracer.get_actions_as_dicts()
 
-        self._write_outputs(status)
+        self._write_transcript_data()
         self.transcript.finalize()
+        self._write_outputs(status)
 
         total_min = (time.monotonic() - self._start_time) / 60
         self.logger.narrate(
@@ -465,6 +466,21 @@ class RalphLoop:
 
         self._publish_reports()
 
+    def _write_transcript_data(self) -> None:
+        """Write full transcript calls as a separate JSON file.
+
+        Kept separate from execution.json so full prompts/responses aren't
+        truncated.  The report generator loads this file to render the
+        LLM Inference Log with complete content.
+        """
+        calls = self.transcript.get_calls()
+        if not calls:
+            return
+        transcript_dir = self.output_dir / "transcripts"
+        transcript_dir.mkdir(parents=True, exist_ok=True)
+        with (transcript_dir / "transcript-calls.json").open("w") as f:
+            json.dump(calls, f, indent=2)
+
     def _publish_reports(self) -> None:
         """Generate visual reports from the execution record.
 
@@ -486,7 +502,10 @@ class RalphLoop:
                 output_dir=reports_dir,
                 config=self.config.reporting,
             )
-            result = publisher.publish(self.execution.to_dict())
+            result = publisher.publish(
+                self.execution.to_dict(),
+                transcript_calls=self.transcript.get_calls(),
+            )
             if result.success:
                 self.logger.info(
                     f"Reports published: {len(result.files_generated)} files",
