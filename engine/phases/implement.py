@@ -341,6 +341,25 @@ class ImplementPhase(Phase):
         impl_plan = validation.get("impl_plan", {})
 
         if validation.get("valid"):
+            if self.tool_executor:
+                commit_msg = f"fix: {impl_plan.get('diff_summary', 'Automated bug fix')}"
+                commit_result = await self.tool_executor.execute(
+                    "git_commit", message=commit_msg, add_all=True
+                )
+                if not commit_result.get("success"):
+                    self.logger.warn(f"Git commit failed: {commit_result.get('stderr')}")
+                    return PhaseResult(
+                        phase=self.name,
+                        success=False,
+                        should_continue=False,
+                        escalate=True,
+                        escalation_reason=f"Git commit failed: {commit_result.get('stderr')}",
+                        findings={
+                            "validation_issues": ["Git commit failed"],
+                            "impl_plan": impl_plan,
+                        },
+                    )
+
             self.logger.narrate(
                 f"Implementation succeeded. {len(validation.get('files_changed', []))} "
                 "file(s) changed. Moving to review."
