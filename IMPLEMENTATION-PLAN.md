@@ -303,6 +303,23 @@ Phased build plan. Each phase produces usable, testable output. Phases are desig
 
 **Deliverable**: Self-improvement loop that watches the engine's own behavior and proposes improvements.
 
+### Review Progressive Leniency ✅
+- Review phase counts prior review iterations via `_count_prior_reviews()`
+- On 2nd+ review: injects `PROGRESSIVE REVIEW` context into LLM prompt instructing pragmatic evaluation
+- `_only_nit_findings()` static method detects when all findings are nit-severity
+- `reflect()` auto-upgrades `request_changes` → `approve` when only nits remain on 2nd+ review
+- `_summarize_prior_reviews()` builds prior review history for LLM context
+- Review prompt (`templates/prompts/review.md`) rewritten with pragmatic guidelines: approve working fixes, nits don't block
+- Escalation threshold increased from 3 to 5 (`escalation_on_review_block_after` in `LoopConfig`)
+
+### Meta Loop Runner Script ✅
+- `scripts/meta-loop.sh` — production meta loop CI runner
+- Triggers `ralph-loop.yml` via `gh workflow run`, monitors with polling, downloads artifacts, analyzes `execution.json`
+- Review analysis: extracts verdicts, findings, rejection counts, escalation reasons
+- Continuous mode (`--continuous`): trigger → wait → analyze → repeat until success or max runs
+- Supports `--fork-repo`, `--provider`, `--config` overrides
+- Auto-detects GitHub repo from git remote
+
 ## Production Hardening (post-build fixes from live runs)
 
 ### Cross-Fork PR Workflow ✅

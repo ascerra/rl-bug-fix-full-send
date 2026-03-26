@@ -237,9 +237,11 @@ xdg-open progress/index.html  # Linux
 | Test runner detection | ✅ | `engine/tools/test_runner.py` — `detect_repo_stack()`: detects target repo language from manifests (go.mod, package.json, Cargo.toml, pyproject.toml) and file extensions, returns language-specific test/lint commands. Configurable via `test_command`/`lint_command` overrides in `.rl-config.yaml` |
 | Cross-phase stack handoff | ✅ | Triage serializes `RepoStack` into `PhaseResult.artifacts["detected_stack"]`. Implement and validate inherit via `_extract_triage_stack()` — prevents re-detection errors from truncated file listings (D17) |
 | Test execution mode (CI-first) | ✅ | `test_execution_mode` config field (`disabled`/`opportunistic`/`required`) on both implement and validate phases. Defaults to `disabled` — tests skipped locally, CI validates after PR. Auto-promotes to `opportunistic` when `test_command` configured |
+| Review progressive leniency | ✅ | Review phase counts prior review iterations, injects pragmatic review context on 2nd+, auto-approves nit-only findings, prior review history summarized for LLM. Escalation threshold raised to 5 |
+| Meta-loop runner | ✅ | `scripts/meta-loop.sh` — triggers workflow, monitors, downloads artifacts, analyzes execution.json, supports continuous mode for iterating until success |
 | Background quality scanner | ✅ | `engine/quality_scanner.py` — `BackgroundQualityScanner`: periodic scans combining golden principles, extraction proposals, code metrics. Auto-generates refactoring PR bodies. Weekly cron workflow. CLI: `python -m engine.quality_scanner` |
 
-**1945 tests passing**, lint clean, golden principles PASS. **18 production deficiencies** identified and cataloged in Phase 7 — all 18 resolved.
+**1945 tests passing**, lint clean, golden principles PASS. **18 production deficiencies** identified and cataloged in Phase 7 — all 18 resolved. Review progressive leniency and meta-loop runner added for production iteration.
 
 ### Cross-Fork PR Workflow
 

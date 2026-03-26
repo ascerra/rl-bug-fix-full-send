@@ -1032,3 +1032,28 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 **Test result**: 624 phase/transcript tests pass; 2 pre-existing config default failures unrelated
 **Decisions made**: Chose to wire transcript into `Phase.record_llm_call()` rather than wrapping the LLM provider, because each call site has unique description/context that only the phase knows
 **Next focus**: Verify transcript HTML artifact appears in next CI run
+
+## Run 50 — Review Progressive Leniency + Meta Loop Runner
+
+**Date**: 2026-03-26
+**Phase**: Post-MVP — review loop convergence fix + production meta loop tooling
+**What shipped**:
+1. **Review progressive leniency** — review phase now counts prior review iterations (`_count_prior_reviews()`), injects `PROGRESSIVE REVIEW` context into LLM prompt on 2nd+ review instructing pragmatic evaluation. `_only_nit_findings()` detects when all remaining findings are nit-severity. `reflect()` auto-upgrades `request_changes` → `approve` when only nits remain on subsequent reviews. `_summarize_prior_reviews()` gives the LLM history of what was already flagged.
+2. **Review prompt rewrite** — `templates/prompts/review.md` verdict guidelines simplified: approve is the default for working fixes, request_changes only for correctness/security issues, pragmatism section added.
+3. **Escalation threshold increase** — `escalation_on_review_block_after` raised from 3 to 5 in `LoopConfig` defaults.
+4. **Meta-loop runner script** — `scripts/meta-loop.sh`: triggers `ralph-loop.yml` via `gh workflow run`, polls for completion, downloads artifacts, analyzes `execution.json` (phase results, iteration trace, review analysis, LLM metrics, escalation diagnosis). Supports `--continuous` mode for automated iteration.
+**Files changed**:
+- `engine/phases/review.py` — added `_count_prior_reviews()`, `_only_nit_findings()`, `_summarize_prior_reviews()`, progressive review context in `plan()`, auto-approve on nit-only in `reflect()`
+- `engine/config.py` — `escalation_on_review_block_after` default 3 → 5
+- `templates/prompts/review.md` — rewritten verdict guidelines, pragmatism section
+- `scripts/meta-loop.sh` — new production meta loop runner (trigger → wait → download → analyze)
+- `IMPLEMENTATION-PLAN.md` — added review leniency and meta-loop items
+- `README.md` — updated status
+**Test result**: 1945 passed, lint clean on changed files
+**Decisions made**:
+- Progressive leniency uses review iteration count from `prior_results` rather than a config flag — it's inherent behavior that gets more pragmatic over time
+- Auto-approve on nits is only active on 2nd+ review — first review is always full rigor
+- Escalation threshold raised to 5 to give the review→implement cycle more room to converge
+- Meta-loop script uses `gh` CLI for all GitHub operations (trigger, monitor, download) — no custom API calls needed
+**Issues hit**: Lint error SIM102 (nested if → combined if) and E501 (line length) — restructured to single if with extracted variable
+**Next focus**: Push changes, run meta-loop.sh against a target issue, verify the review convergence improvement

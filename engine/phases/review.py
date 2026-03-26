@@ -33,6 +33,8 @@ class ReviewPhase(Phase):
         """Gather the implementation diff, affected files, and re-read the issue."""
         self.logger.info("Observing: gathering diff, affected files, and issue context")
 
+        review_iteration = self._count_prior_reviews()
+
         impl_artifacts = self._extract_impl_artifacts()
         diff = impl_artifacts.get("diff", "")
 
@@ -61,11 +63,14 @@ class ReviewPhase(Phase):
             "files_changed": files_changed,
             "file_contents": file_contents,
             "impl_findings": impl_artifacts.get("findings", {}),
+            "review_iteration": review_iteration,
         }
 
     async def plan(self, observation: dict[str, Any]) -> dict[str, Any]:
         """Call LLM with the review prompt, issue content, and diff for independent review."""
         self.logger.info("Planning: requesting independent code review via LLM")
+
+        review_iteration = observation.get("review_iteration", 0)
 
         system_prompt = self.load_system_prompt()
 
@@ -94,6 +99,21 @@ class ReviewPhase(Phase):
             f"{impl_summary}\n"
             f"File contents after fix:\n{file_context}"
         )
+
+        if review_iteration > 0:
+            prior_findings = self._summarize_prior_reviews()
+            trusted_context += (
+                f"\n\nPROGRESSIVE REVIEW (iteration {review_iteration + 1}):\n"
+                "The implementer has already addressed prior review feedback. "
+                "This is review attempt #{iter_num}. Be pragmatic:\n"
+                "- If the fix is CORRECT and addresses the bug, approve it even "
+                "with minor style or convention issues.\n"
+                "- Only request_changes for CORRECTNESS or SECURITY issues.\n"
+                "- Style nits and minor suggestions should use severity 'nit' "
+                "and should NOT change your verdict from 'approve'.\n"
+                "- The goal is a working bug fix, not perfect code.\n"
+                f"{prior_findings}"
+            ).replace("{iter_num}", str(review_iteration + 1))
 
         untrusted = self._wrap_untrusted_content(
             f"Issue title: {issue_title}\n\n"
@@ -214,11 +234,16 @@ class ReviewPhase(Phase):
         ``severity: blocking`` AND ``dimension: security``.  This prevents
         quality-only issues from killing the loop — the implementer gets
         actionable feedback instead.
+
+        On the 2nd+ review iteration, ``request_changes`` with only nit-severity
+        findings is auto-upgraded to ``approve`` — the fix is good enough and
+        iterating further on style nits wastes the budget.
         """
         self.logger.info("Reflecting: deciding review outcome")
 
         review = validation.get("review_result", {})
         verdict = validation.get("verdict", "")
+        review_iteration = self._count_prior_reviews()
 
         if validation.get("injection_detected", False):
             self.logger.narrate("ALERT: Prompt injection detected in code/issue. Escalating.")
@@ -249,6 +274,19 @@ class ReviewPhase(Phase):
             verdict = "request_changes"
             review = dict(review, verdict="request_changes")
             self.logger.narrate("Block verdict downgraded to request_changes (no security threat).")
+
+        nits_only = self._only_nit_findings(review)
+        if verdict == "request_changes" and review_iteration > 0 and nits_only:
+            self.logger.warn(
+                f"Auto-approving on review iteration {review_iteration + 1} — "
+                "only nit-severity findings remain"
+            )
+            verdict = "approve"
+            review = dict(review, verdict="approve")
+            self.logger.narrate(
+                f"Review iteration {review_iteration + 1}: only nits remain. "
+                "Auto-approving — fix is good enough."
+            )
 
         if verdict == "approve":
             self.logger.narrate("Review approved. Moving to validate.")
@@ -303,6 +341,50 @@ class ReviewPhase(Phase):
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    def _count_prior_reviews(self) -> int:
+        """Count how many prior review phase results exist.
+
+        Returns the number of times the review phase has already run in
+        this loop execution.  Used for progressive leniency — subsequent
+        reviews are more pragmatic about minor issues.
+        """
+        return sum(1 for r in self.prior_results if r.phase == "review")
+
+    @staticmethod
+    def _only_nit_findings(review: dict[str, Any]) -> bool:
+        """Return True if all findings are nit-severity (no blocking/suggestion).
+
+        An empty findings list also counts as nit-only (nothing serious found).
+        """
+        findings = review.get("findings", [])
+        return all(f.get("severity") == "nit" for f in findings)
+
+    def _summarize_prior_reviews(self) -> str:
+        """Build a summary of what prior reviews flagged.
+
+        Helps the LLM understand what was already addressed and avoids
+        re-raising the same issues.
+        """
+        lines: list[str] = []
+        for result in self.prior_results:
+            if result.phase != "review":
+                continue
+            review_data = result.artifacts.get("review_report") or result.findings
+            if not review_data:
+                continue
+            verdict = review_data.get("verdict", "unknown")
+            findings = review_data.get("findings", [])
+            summary = review_data.get("summary", "")
+            lines.append(f"  Prior review (verdict={verdict}): {summary}")
+            for f in findings[:5]:
+                dim = f.get("dimension", "?")
+                sev = f.get("severity", "?")
+                desc = f.get("description", "")
+                lines.append(f"    - [{dim}/{sev}] {desc}")
+        if lines:
+            return "Prior review history:\n" + "\n".join(lines)
+        return ""
 
     @staticmethod
     def _has_security_block(review: dict[str, Any]) -> bool:

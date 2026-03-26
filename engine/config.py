@@ -25,7 +25,7 @@ class LoopConfig:
     time_budget_minutes: int = 30
     escalation_on_iteration_cap: str = "human"
     escalation_on_time_budget: str = "human"
-    escalation_on_review_block_after: int = 3
+    escalation_on_review_block_after: int = 5
     retry_backoff_base_seconds: float = 1.0
     retry_backoff_max_seconds: float = 4.0
 

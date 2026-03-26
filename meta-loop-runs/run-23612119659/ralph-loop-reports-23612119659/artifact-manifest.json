@@ -1,0 +1,16 @@
+{
+  "generated_at": "2026-03-26T18:55:23.580450+00:00",
+  "execution_id": "8ef2598f-bb3c-4d86-b4c3-9775fef7701a",
+  "status": "escalated",
+  "config": {
+    "decision_tree": true,
+    "action_map": true,
+    "comparison_mode": false,
+    "publish_to_pages": false,
+    "artifact_retention_days": 30
+  },
+  "files": [
+    "output/reports/report.html",
+    "output/reports/summary.md"
+  ]
+}

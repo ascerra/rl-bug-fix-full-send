@@ -931,6 +931,16 @@ def _format_review_feedback(feedback: dict[str, Any]) -> str:
         f"  Verdict: {feedback.get('verdict', 'N/A')}",
         f"  Summary: {feedback.get('summary', 'N/A')}",
     ]
+
+    scope = feedback.get("scope_assessment")
+    if scope in ("mixed", "feature"):
+        lines.append(
+            "\n  CRITICAL: The reviewer flagged your previous fix for SCOPE CREEP. "
+            "Your ONLY task is to apply the MINIMAL change required to fix the bug. "
+            "DO NOT refactor code. DO NOT add features. DO NOT make unrelated changes. "
+            "If you refactor again, the review will be rejected again."
+        )
+
     findings = feedback.get("findings", [])
     if findings:
         lines.append(f"  Findings ({len(findings)}):")
