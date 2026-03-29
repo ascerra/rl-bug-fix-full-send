@@ -737,7 +737,8 @@ class TestReportGeneratorIntegration:
 
         gen = ReportGenerator()
         html = gen.generate(_make_execution())
-        assert "d3.v7.min.js" in html
+        assert 'src="https://d3js.org' not in html, "D3 should be vendored inline"
+        assert "function(t,n)" in html or "d3.select" in html
 
     def test_decision_tree_js_included(self):
         from engine.visualization.report_generator import ReportGenerator

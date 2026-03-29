@@ -1,22 +1,35 @@
 #!/usr/bin/env python3
-"""Meta Loop Agent — analyzes failed Ralph Loop runs and generates engine fixes.
+"""Meta Ralph Loop Agent — implements planned work and diagnoses production failures.
 
-Reads execution.json from a failed run, feeds it along with engine source code
-to an LLM, and applies the suggested code changes to the local codebase.
+Two modes of operation:
 
-This is the "brain" of the meta loop: the component that closes the gap between
-"the run failed" and "here are the engine code changes to try next."
+1. **Task mode** (--task): Reads a task description + IMPLEMENTATION-PLAN.md + relevant
+   codebase files, generates and applies code changes to implement the task. Use this to
+   drive implementation of planned work before running production jobs.
+
+2. **Diagnose mode** (--execution-json): Reads execution.json from a failed production
+   run, diagnoses the root cause, and generates targeted fixes. Use this to iterate on
+   failures after production runs.
+
+This is the "brain" of the meta Ralph Loop: the component that closes the gap between
+"here's what needs to happen" and "here are the code changes."
 
 Usage:
+    # Implement a task from the plan
+    python scripts/meta_loop_agent.py --task "Implement review phase leniency" [OPTIONS]
+
+    # Diagnose and fix a failed production run
     python scripts/meta_loop_agent.py --execution-json <PATH> [OPTIONS]
 
 Options:
-    --execution-json PATH   Path to execution.json from a failed run (required)
+    --task DESCRIPTION      Task to implement (reads IMPLEMENTATION-PLAN.md for context)
+    --execution-json PATH   Path to execution.json from a failed run
+    --files FILE [FILE ...] Additional files to include as context (beyond the defaults)
     --project-dir DIR       Project root (default: auto-detect from script location)
     --provider NAME         LLM provider: gemini or anthropic (default: gemini)
     --dry-run               Show what would change without modifying files
     --verbose               Print full LLM diagnosis
-    --max-context CHARS     Max chars of execution.json to include (default: 60000)
+    --max-context CHARS     Max chars of context to include (default: 60000)
 
 Exit codes:
     0 = changes were applied successfully
@@ -46,21 +59,40 @@ ENGINE_FILES = [
     "engine/phases/triage.py",
     "engine/phases/validate.py",
     "engine/phases/base.py",
+    "engine/phases/report.py",
+    "engine/phases/prompt_loader.py",
+    "engine/__init__.py",
+    "engine/__main__.py",
+    "engine/integrations/llm.py",
+    "engine/integrations/github.py",
+    "engine/tools/executor.py",
+    "engine/tools/test_runner.py",
+    "engine/observability/logger.py",
+    "engine/observability/tracer.py",
+    "engine/visualization/publisher.py",
     "templates/prompts/review.md",
     "templates/prompts/implement.md",
     "templates/prompts/triage.md",
     "templates/prompts/validate.md",
+    "templates/prompts/report.md",
 ]
 
-SYSTEM_PROMPT = """\
-You are an expert debugger for the Ralph Loop — an AI agent that automatically
-fixes bugs in code repositories by iterating through Triage → Implement →
-Review → Validate → Report phases.
+PLAN_FILES = [
+    "IMPLEMENTATION-PLAN.md",
+    "SPEC.md",
+    "ARCHITECTURE.md",
+    "README.md",
+]
 
-You are part of a META LOOP that improves the Ralph Loop engine itself.
+DIAGNOSE_PROMPT = """\
+You are an expert debugger for the RL Bug Fix engine — a phased OODA pipeline
+that automatically fixes bugs in code repositories by running through
+Triage → Implement → Review → Validate → Report phases.
+
+You are part of the META RALPH LOOP that develops and maintains this engine.
 
 Given:
-1. The execution trace from a FAILED Ralph Loop run (execution.json)
+1. The execution trace from a FAILED production run (execution.json)
 2. The engine source code
 
 Your job:
@@ -115,13 +147,85 @@ Return ONLY a JSON object (no markdown fences, no commentary) with this shape:
 - Set confidence to "low" if you're uncertain and explain in diagnosis.
 """
 
+TASK_PROMPT = """\
+You are a senior engineer working on the RL Bug Fix engine — a phased OODA pipeline
+that automatically fixes bugs in code repositories.
 
-def build_user_message(
+You are part of the META RALPH LOOP that develops and maintains this engine.
+
+Given:
+1. A TASK DESCRIPTION telling you what to implement
+2. The IMPLEMENTATION PLAN with the project's status and roadmap
+3. The engine source code and documentation
+
+Your job:
+1. Understand the task and its context within the implementation plan.
+2. Read the relevant source files carefully.
+3. Generate SPECIFIC code edits that implement the task correctly.
+4. Update documentation (README.md, IMPLEMENTATION-PLAN.md) to reflect the changes.
+
+## Output Format
+
+Return ONLY a JSON object (no markdown fences, no commentary) with this shape:
+
+{
+  "diagnosis": "What the task requires and your approach to implementing it",
+  "root_cause": "Single phrase summarizing the task: e.g. 'add retry backoff to implement phase'",
+  "changes": [
+    {
+      "file": "relative/path/to/file.py",
+      "search": "exact text to find in the file (multi-line is fine)",
+      "replace": "exact replacement text",
+      "reason": "why this change is needed for the task"
+    }
+  ],
+  "summary": "One-line summary of all changes made",
+  "confidence": "high|medium|low"
+}
+
+## Rules
+
+- "search" must EXACTLY match existing text in the file (whitespace, indentation,
+  newlines must all match). Read the file contents provided carefully.
+- You can create NEW files by setting "search" to "" (empty string) and "file" to
+  the new file path. The "replace" field becomes the full file content.
+- Make focused, correct changes. Include all necessary imports and updates.
+- If the task requires changes across multiple files, list them all.
+- Update tests if you're changing behavior that existing tests cover.
+- Update IMPLEMENTATION-PLAN.md to mark completed items with ✅.
+- Set confidence to "low" if the task is ambiguous and explain in diagnosis.
+- Do NOT add unnecessary comments. Code should be self-documenting.
+"""
+
+
+def _read_files_as_context(
+    project_dir: Path,
+    file_list: list[str],
+    extra_files: list[str] | None = None,
+) -> str:
+    """Read a list of project-relative file paths and format as LLM context."""
+    parts: list[str] = []
+    seen: set[str] = set()
+    for rel_path in [*file_list, *(extra_files or [])]:
+        if rel_path in seen:
+            continue
+        seen.add(rel_path)
+        full_path = project_dir / rel_path
+        if not full_path.exists():
+            continue
+        content = full_path.read_text()
+        parts.append(f"\n### {rel_path}\n")
+        parts.append(f"```\n{content}\n```\n")
+    return "\n".join(parts)
+
+
+def build_diagnose_message(
     execution_json_path: str,
     project_dir: Path,
+    extra_files: list[str] | None = None,
     max_context: int = 60000,
 ) -> str:
-    """Build the user message with execution data + engine source."""
+    """Build the user message for diagnose mode: execution trace + engine source."""
     exec_text = Path(execution_json_path).read_text()
 
     parts: list[str] = []
@@ -133,15 +237,34 @@ def build_user_message(
     parts.append("\n```\n")
 
     parts.append("\n## Engine Source Code\n")
-    for rel_path in ENGINE_FILES:
-        full_path = project_dir / rel_path
-        if not full_path.exists():
-            continue
-        content = full_path.read_text()
-        parts.append(f"\n### {rel_path}\n")
-        parts.append(f"```\n{content}\n```\n")
+    parts.append(_read_files_as_context(project_dir, ENGINE_FILES, extra_files))
 
     return "\n".join(parts)
+
+
+def build_task_message(
+    task: str,
+    project_dir: Path,
+    extra_files: list[str] | None = None,
+    max_context: int = 60000,
+) -> str:
+    """Build the user message for task mode: task description + plan + engine source."""
+    parts: list[str] = []
+
+    parts.append("## Task\n")
+    parts.append(task)
+    parts.append("\n")
+
+    parts.append("\n## Project Documentation\n")
+    parts.append(_read_files_as_context(project_dir, PLAN_FILES))
+
+    parts.append("\n## Engine Source Code\n")
+    parts.append(_read_files_as_context(project_dir, ENGINE_FILES, extra_files))
+
+    full = "\n".join(parts)
+    if len(full) > max_context:
+        return full[:max_context] + "\n\n... (truncated) ..."
+    return full
 
 
 def extract_json(text: str) -> dict:
@@ -161,20 +284,33 @@ def extract_json(text: str) -> dict:
 
 
 async def run_agent(
-    execution_json: str,
+    *,
+    mode: str,
     project_dir: Path,
     provider_name: str = "gemini",
     max_context: int = 60000,
+    execution_json: str = "",
+    task: str = "",
+    extra_files: list[str] | None = None,
 ) -> dict:
-    """Call the LLM to diagnose and suggest fixes for a failed run."""
+    """Call the LLM to diagnose a failure or implement a task."""
     provider = create_provider(provider_name)
 
-    user_msg = build_user_message(execution_json, project_dir, max_context)
+    if mode == "task":
+        system_prompt = TASK_PROMPT
+        user_msg = build_task_message(task, project_dir, extra_files, max_context)
+    else:
+        system_prompt = DIAGNOSE_PROMPT
+        user_msg = build_diagnose_message(
+            execution_json, project_dir, extra_files, max_context
+        )
+
+    print(f"  Mode:         {mode}")
     print(f"  Context size: {len(user_msg):,} chars")
     print(f"  LLM provider: {provider_name}")
 
     response = await provider.complete(
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         messages=[{"role": "user", "content": user_msg}],
         temperature=0.3,
         max_tokens=16384,
@@ -195,20 +331,35 @@ def apply_changes(
     project_dir: Path,
     dry_run: bool = False,
 ) -> list[str]:
-    """Apply search/replace edits to files. Returns list of modified file paths."""
+    """Apply search/replace edits to files. Returns list of modified file paths.
+
+    If "search" is empty, creates a new file with "replace" as its content.
+    """
     modified: list[str] = []
 
     for i, change in enumerate(changes, 1):
         file_path = project_dir / change["file"]
         reason = change.get("reason", "N/A")
+        search = change.get("search", "")
+        replace = change.get("replace", "")
+
+        if not search:
+            if dry_run:
+                print(f"  [dry-run {i}] Would create: {change['file']}")
+                print(f"               Reason: {reason}")
+            else:
+                file_path.parent.mkdir(parents=True, exist_ok=True)
+                file_path.write_text(replace)
+                print(f"  [{i}] Created: {change['file']}")
+                print(f"       Reason: {reason}")
+                modified.append(change["file"])
+            continue
 
         if not file_path.exists():
             print(f"  WARNING [{i}] File not found: {change['file']}")
             continue
 
         content = file_path.read_text()
-        search = change["search"]
-        replace = change["replace"]
 
         if search not in content:
             print(f"  WARNING [{i}] Search text not found in {change['file']}")
@@ -253,12 +404,24 @@ def print_summary(result: dict, verbose: bool = False) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Meta Loop Agent: diagnose failed runs and generate engine fixes"
+        description="Meta Ralph Loop Agent: implement tasks and diagnose failures"
     )
-    parser.add_argument(
+
+    mode_group = parser.add_mutually_exclusive_group(required=True)
+    mode_group.add_argument(
+        "--task",
+        help="Task description to implement (reads IMPLEMENTATION-PLAN.md for context)",
+    )
+    mode_group.add_argument(
         "--execution-json",
-        required=True,
-        help="Path to execution.json from a failed run",
+        help="Path to execution.json from a failed run (diagnose mode)",
+    )
+
+    parser.add_argument(
+        "--files",
+        nargs="+",
+        default=[],
+        help="Additional files to include as LLM context",
     )
     parser.add_argument(
         "--project-dir",
@@ -285,21 +448,32 @@ def main() -> int:
         "--max-context",
         type=int,
         default=60000,
-        help="Max chars of execution.json to send to LLM (default: 60000)",
+        help="Max chars of context to send to LLM (default: 60000)",
     )
 
     args = parser.parse_args()
     project = Path(args.project_dir)
 
-    exec_path = Path(args.execution_json)
-    if not exec_path.exists():
-        print(f"ERROR: execution.json not found: {exec_path}", file=sys.stderr)
-        return 2
+    if args.task:
+        mode = "task"
+    else:
+        mode = "diagnose"
+        exec_path = Path(args.execution_json)
+        if not exec_path.exists():
+            print(f"ERROR: execution.json not found: {exec_path}", file=sys.stderr)
+            return 2
 
     print()
-    print("Meta Loop Agent")
+    print("Meta Ralph Loop Agent")
     print("=" * 50)
-    print(f"  Execution JSON: {exec_path}")
+    if mode == "task":
+        print(f"  Mode:           task")
+        print(f"  Task:           {args.task[:120]}")
+    else:
+        print(f"  Mode:           diagnose")
+        print(f"  Execution JSON: {args.execution_json}")
+    if args.files:
+        print(f"  Extra files:    {', '.join(args.files)}")
     print(f"  Project dir:    {project}")
     print(f"  Provider:       {args.provider}")
     print(f"  Dry run:        {args.dry_run}")
@@ -309,10 +483,13 @@ def main() -> int:
     try:
         result = asyncio.run(
             run_agent(
-                str(exec_path),
-                project,
-                args.provider,
-                args.max_context,
+                mode=mode,
+                project_dir=project,
+                provider_name=args.provider,
+                max_context=args.max_context,
+                execution_json=args.execution_json or "",
+                task=args.task or "",
+                extra_files=args.files or None,
             )
         )
     except Exception as exc:
@@ -323,8 +500,11 @@ def main() -> int:
 
     changes = result.get("changes", [])
     if not changes:
-        print("  No code changes suggested.")
-        print("  The failure may be external (LLM outage, API error, etc.)")
+        if mode == "diagnose":
+            print("  No code changes suggested.")
+            print("  The failure may be external (LLM outage, API error, etc.)")
+        else:
+            print("  No code changes suggested for this task.")
         return 1
 
     print("  Applying changes..." if not args.dry_run else "  Dry run — proposed changes:")
@@ -344,7 +524,8 @@ def main() -> int:
             print(f"    - {f}")
         print()
 
-        summary_file = exec_path.parent / "agent-changes.json"
+        output_dir = Path(args.execution_json).parent if args.execution_json else project
+        summary_file = output_dir / "agent-changes.json"
         summary_file.write_text(json.dumps(result, indent=2))
         print(f"  Agent output saved to: {summary_file}")
         return 0

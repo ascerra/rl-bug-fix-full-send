@@ -1,0 +1,40 @@
+# Default observer policy — evaluated against the signed attestation.
+#
+# Each rule can be independently enabled/disabled.  When a rule is
+# enabled, the observer checks the attestation against it and reports
+# pass/fail.  See SPEC.md §5.6 and IMPLEMENTATION-PLAN.md §8.4.
+
+policy:
+  version: "1"
+  rules:
+
+    model_allowlist:
+      enabled: true
+      # Populated from observer.model_allowlist in .rl-config.yaml.
+      # Empty list = skip check (warning, not violation).
+      models: []
+
+    prompt_integrity:
+      enabled: false
+      # Requires known-good SHA-256 digests to be configured at
+      # build/release time.  Map of "prompt://<name>" → "sha256:<hex>".
+      known_digests: {}
+
+    scope_compliance:
+      enabled: true
+      # Maximum number of files modified that are not related to the
+      # issue (by triage components or issue body reference).
+      max_unrelated_files: 0
+
+    cross_checks:
+      enabled: true
+      required_checks:
+        - diff_consistency
+        - action_completeness
+        - phase_ordering
+
+    iteration_limits:
+      enabled: true
+      # Falls back to the engine's max_iterations (default 10) when
+      # not explicitly set here.
+      max_iterations: 10

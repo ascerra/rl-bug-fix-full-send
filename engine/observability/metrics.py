@@ -1,4 +1,4 @@
-"""Simple metrics collection for Ralph Loop execution."""
+"""Simple metrics collection for pipeline execution."""
 
 from __future__ import annotations
 

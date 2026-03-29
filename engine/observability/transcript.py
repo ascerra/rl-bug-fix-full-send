@@ -127,7 +127,8 @@ function toggleRefresh() {
 
 
 def _phase_css_class(phase: str) -> str:
-    return f"phase-{phase}" if phase in ("triage", "implement", "review", "validate", "report") else "phase-init"
+    known = ("triage", "implement", "review", "validate", "report")
+    return f"phase-{phase}" if phase in known else "phase-init"
 
 
 def _esc(text: str) -> str:
@@ -208,33 +209,31 @@ class TranscriptWriter:
         response = entry["response"]
 
         print(
-            f"\n{'='*80}\n"
+            f"\n{'=' * 80}\n"
             f">>> [{phase}] LLM CALL: {desc}\n"
             f"    Model: {model} | {tokens} | {latency}\n"
-            f"{'='*80}",
+            f"{'=' * 80}",
             file=sys.stderr,
         )
 
         sys_prompt = entry.get("system_prompt", "")
         if sys_prompt:
             print(
-                f"--- SYSTEM PROMPT ({len(sys_prompt)} chars) ---\n"
-                f"{_truncate(sys_prompt, 1000)}\n",
+                f"--- SYSTEM PROMPT ({len(sys_prompt)} chars) ---\n{_truncate(sys_prompt, 1000)}\n",
                 file=sys.stderr,
             )
 
         user_msg = entry.get("user_message", "")
         if user_msg:
             print(
-                f"--- USER MESSAGE ({len(user_msg)} chars) ---\n"
-                f"{_truncate(user_msg, 2000)}\n",
+                f"--- USER MESSAGE ({len(user_msg)} chars) ---\n{_truncate(user_msg, 2000)}\n",
                 file=sys.stderr,
             )
 
         print(
             f"--- LLM RESPONSE ({len(response)} chars) ---\n"
             f"{_truncate(response, 3000)}\n"
-            f"{'='*80}\n",
+            f"{'=' * 80}\n",
             file=sys.stderr,
         )
 
@@ -277,7 +276,7 @@ class TranscriptWriter:
         phase_cls = _phase_css_class(phase)
         desc = _esc(entry["description"])
         model = _esc(entry["model"])
-        provider = _esc(entry["provider"])
+        _esc(entry["provider"])
         ts = entry["timestamp"][:19].replace("T", " ")
         tokens_in = entry["tokens_in"]
         tokens_out = entry["tokens_out"]
@@ -344,7 +343,7 @@ class TranscriptWriter:
               <pre>LLM calls:     {total_calls}
 Tokens in:     {total_tokens_in:,}
 Tokens out:    {total_tokens_out:,}
-Total latency: {total_latency:,.0f}ms ({total_latency/1000:.1f}s)</pre>
+Total latency: {total_latency:,.0f}ms ({total_latency / 1000:.1f}s)</pre>
             </div>
             <div class="section">
               <div class="section-label">Calls per Phase</div>

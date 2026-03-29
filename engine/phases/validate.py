@@ -201,8 +201,15 @@ class ValidatePhase(Phase):
         }
 
     async def act(self, plan: dict[str, Any]) -> dict[str, Any]:
-        """Create the PR if all checks pass, or report blocking issues."""
-        self.logger.info("Acting: creating PR if validation passes")
+        """Create the PR only after all implement-first gates pass.
+
+        Gates checked by ``_is_ready_to_push()``:
+          (a) Review phase approved the change
+          (b) Local lint checks pass
+          (c) LLM validation assessment is ready
+          (d) Tests pass (only when ``test_execution_mode`` is ``"required"``)
+        """
+        self.logger.info("Acting: checking implement-first gates before PR creation")
 
         validate_result = plan.get("validate_result", {})
         test_result = plan.get("test_result", {})
@@ -210,21 +217,24 @@ class ValidatePhase(Phase):
         observation = plan.get("observation", {})
         actions: list[dict[str, Any]] = []
 
-        test_exec_mode = self.config.phases.validate.test_execution_mode
-        tests_gate = test_exec_mode == "required"
-
         ready = validate_result.get("ready_to_submit", False)
         tests_ok = test_result.get("passed", False)
         lint_ok = lint_result.get("passed", False)
 
-        can_create_pr = ready and lint_ok and (tests_ok or not tests_gate)
+        can_push, push_blockers = self._is_ready_to_push(
+            lint_passed=lint_ok,
+            llm_ready=ready,
+            tests_ok=tests_ok,
+        )
 
         pr_created = False
         pr_url = ""
         pr_error = ""
         ci_status: dict[str, Any] = {}
 
-        if can_create_pr and self.tool_executor:
+        gh_token = os.environ.get("GH_PAT", "") or os.environ.get("GITHUB_TOKEN", "")
+
+        if can_push and self.tool_executor and gh_token:
             issue_url = self.issue_data.get("url", "")
             issue_number_match = re.search(r"/issues/(\d+)", issue_url)
             issue_number = issue_number_match.group(1) if issue_number_match else "unknown"
@@ -241,19 +251,16 @@ class ValidatePhase(Phase):
 
         if pr_created:
             self.logger.narrate(f"PR created: {pr_url}")
-        elif can_create_pr and not self.tool_executor:
+        elif can_push and not self.tool_executor:
             self.logger.narrate("PR creation skipped (no tool executor).")
-        elif can_create_pr:
+            can_push = False
+        elif can_push and not gh_token:
+            self.logger.narrate("PR creation skipped — no GitHub token (GH_PAT or GITHUB_TOKEN).")
+            can_push = False
+        elif can_push:
             self.logger.narrate(f"PR creation failed: {pr_error or 'unknown error'}.")
         else:
-            blocking = []
-            if not tests_ok and tests_gate:
-                blocking.append("tests failing")
-            if not lint_ok:
-                blocking.append("lint failing")
-            if not ready:
-                blocking.append("not ready")
-            self.logger.narrate(f"PR not created: {', '.join(blocking)}.")
+            self.logger.narrate(f"PR not created: {'; '.join(push_blockers)}.")
 
         return {
             "validate_result": validate_result,
@@ -262,7 +269,8 @@ class ValidatePhase(Phase):
             "pr_created": pr_created,
             "pr_url": pr_url,
             "pr_error": pr_error,
-            "can_create_pr": can_create_pr,
+            "can_create_pr": can_push,
+            "push_blockers": push_blockers,
             "ci_status": ci_status,
             "actions": actions,
         }
@@ -399,6 +407,62 @@ class ValidatePhase(Phase):
             should_continue=True,
             findings={"validation_issues": issues, "validate_result": validate_result},
         )
+
+    # ------------------------------------------------------------------
+    # Implement-first push gate
+    # ------------------------------------------------------------------
+
+    def _is_ready_to_push(
+        self,
+        lint_passed: bool,
+        llm_ready: bool,
+        tests_ok: bool,
+    ) -> tuple[bool, list[str]]:
+        """Gate check: all prerequisites must pass before pushing/creating a PR.
+
+        Enforces the implement-first principle (SPEC §5.7 / FR-6.1-FR-6.2):
+        the engine must NOT push or create a PR until:
+          (a) Review phase approved the change
+          (b) Local lint checks pass
+          (c) LLM validation assessment says ready
+          (d) Tests pass (only in ``required`` mode)
+
+        Returns ``(ready, list_of_blocking_reasons)``.
+        """
+        blockers: list[str] = []
+
+        if not self._has_review_approval():
+            blockers.append("Review phase has not approved the change")
+
+        if not lint_passed:
+            blockers.append("Local lint checks failing")
+
+        if not llm_ready:
+            blockers.append("LLM validation assessment not ready to submit")
+
+        test_exec_mode = self.config.phases.validate.test_execution_mode
+        if test_exec_mode == "required" and not tests_ok:
+            blockers.append("Tests failing (required mode)")
+
+        return (len(blockers) == 0, blockers)
+
+    def _has_review_approval(self) -> bool:
+        """Check if the most recent review phase approved the change.
+
+        Only the latest review result matters (zero trust).  Checks both
+        ``findings`` and the ``review_report`` artifact since different
+        code paths store the verdict in different locations.
+        """
+        for result in reversed(self.prior_results):
+            if result.phase != "review":
+                continue
+            if not result.success:
+                return False
+            if result.findings.get("verdict") == "approve":
+                return True
+            review_report = result.artifacts.get("review_report", {})
+            return isinstance(review_report, dict) and review_report.get("verdict") == "approve"
+        return False
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -587,8 +651,15 @@ class ValidatePhase(Phase):
         else:
             head_ref = branch_name
 
+        pr_title = validate_result.get(
+            "pr_title",
+            f"fix: {self.issue_data.get('title', 'Bug fix')}",
+        )
+        if len(pr_title) > 150:
+            pr_title = pr_title[:147] + "..."
+
         pr_body = {
-            "title": f"Fix: {self.issue_data.get('title', 'Bug fix')}",
+            "title": pr_title,
             "body": pr_description,
             "head": head_ref,
             "base": "main",

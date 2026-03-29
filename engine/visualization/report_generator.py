@@ -2,10 +2,16 @@
 
 Uses Jinja2 templates from templates/visual-report/ with embedded CSS/JS.
 Produces a single HTML file that can be viewed in any browser without a server.
+
+When ``visualization_engine`` is ``"threejs"`` (default), Three.js + OrbitControls
+are inlined from vendored files (``templates/visual-report/vendor/``), producing a
+fully self-contained report with no external dependencies.  When ``"d3"``, the 3D
+section is omitted and only the 2D D3.js decision tree + action map are included.
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -13,11 +19,23 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
 
+from engine.config import ReportingConfig
 from engine.visualization.action_map import build_action_map
 from engine.visualization.comparison import build_comparison
 from engine.visualization.decision_tree import build_decision_tree
+from engine.visualization.narrative.formatter import enrich_scene_with_narratives
+from engine.visualization.narrative.summary import build_landing
+from engine.visualization.scene.builder import SceneBuilder
+from engine.visualization.scene.timeline import build_timeline
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent.parent / "templates" / "visual-report"
+_VENDOR_DIR = _TEMPLATES_DIR / "vendor"
+
+_VENDOR_FILES: dict[str, str] = {
+    "three_js": "three.min.js",
+    "orbit_controls_js": "orbit-controls.min.js",
+    "d3_js": "d3.v7.min.js",
+}
 
 
 @dataclass
@@ -43,6 +61,9 @@ class ReportData:
     comparison: dict[str, Any] = field(default_factory=dict)
     narrative: str = ""
     transcript_calls: list[dict[str, Any]] = field(default_factory=list)
+    scene_data: dict[str, Any] = field(default_factory=dict)
+    timeline_data: dict[str, Any] = field(default_factory=dict)
+    landing_data: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -65,18 +86,26 @@ class ReportData:
             "comparison": self.comparison,
             "narrative": self.narrative,
             "transcript_calls": self.transcript_calls,
+            "scene_data": self.scene_data,
+            "timeline_data": self.timeline_data,
+            "landing_data": self.landing_data,
         }
 
 
 def extract_report_data(
     execution: dict[str, Any],
     transcript_calls: list[dict[str, Any]] | None = None,
+    *,
+    visualization_engine: str = "threejs",
 ) -> ReportData:
     """Extract structured ReportData from a raw execution record dict.
 
     Accepts the full execution.json structure (with top-level "execution" key)
     or a flat execution dict.  ``transcript_calls`` is the list of LLM call
     records from ``transcript-calls.json`` (full prompts and responses).
+
+    When *visualization_engine* is ``"d3"``, the 3D scene, timeline, and landing
+    data are skipped (empty dicts), saving computation for legacy-mode reports.
     """
     exec_data = execution.get("execution", execution)
 
@@ -90,6 +119,21 @@ def extract_report_data(
     tree = build_decision_tree(execution)
     action_map = build_action_map(execution)
     comparison = build_comparison(execution)
+
+    scene_dict: dict[str, Any] = {}
+    timeline_dict: dict[str, Any] = {}
+    landing_dict: dict[str, Any] = {}
+
+    if visualization_engine != "d3":
+        builder = SceneBuilder()
+        scene = builder.build(execution)
+        comparison_dict = comparison.to_dict()
+        if comparison_dict.get("enabled"):
+            builder.add_comparison_ghosts(scene, comparison_dict)
+        scene_dict = scene.to_dict()
+        enrich_scene_with_narratives(scene_dict, actions)
+        timeline_dict = build_timeline(execution).to_dict()
+        landing_dict = build_landing(execution).to_dict()
 
     from engine.visualization.publisher import build_narrative  # local to avoid cycle
 
@@ -115,6 +159,9 @@ def extract_report_data(
         comparison=comparison.to_dict(),
         narrative=narrative,
         transcript_calls=transcript_calls or [],
+        scene_data=scene_dict,
+        timeline_data=timeline_dict,
+        landing_data=landing_dict,
     )
 
 
@@ -172,12 +219,28 @@ class ReportGenerator:
 
     The generator loads Jinja2 templates from ``templates/visual-report/``
     and renders them with extracted execution data. The output is a single
-    HTML file with embedded CSS — no external dependencies required.
+    HTML file with embedded CSS and JavaScript — no external dependencies.
+
+    Args:
+        templates_dir: Override for the templates directory.
+        config: Reporting configuration. Controls ``visualization_engine``
+            (``"threejs"`` or ``"d3"``), which determines whether Three.js
+            and the 3D scene are included in the report.
     """
 
-    def __init__(self, templates_dir: Path | str | None = None):
+    def __init__(
+        self,
+        templates_dir: Path | str | None = None,
+        config: ReportingConfig | None = None,
+    ):
         self._templates_dir = Path(templates_dir) if templates_dir else _TEMPLATES_DIR
+        self._config = config or ReportingConfig()
         self._env: Environment | None = None
+        self._vendor_cache: dict[str, str] = {}
+
+    @property
+    def visualization_engine(self) -> str:
+        return self._config.visualization_engine
 
     @property
     def _jinja_env(self) -> Environment:
@@ -212,7 +275,11 @@ class ReportGenerator:
         Returns:
             The rendered HTML string.
         """
-        report_data = extract_report_data(execution, transcript_calls=transcript_calls)
+        report_data = extract_report_data(
+            execution,
+            transcript_calls=transcript_calls,
+            visualization_engine=self.visualization_engine,
+        )
         html = self._render(report_data, template_name)
 
         if output_path:
@@ -252,10 +319,8 @@ class ReportGenerator:
         transcript_calls: list[dict[str, Any]] | None = None
         transcript_path = path.parent / "transcripts" / "transcript-calls.json"
         if transcript_path.exists():
-            try:
+            with contextlib.suppress(json.JSONDecodeError, OSError):
                 transcript_calls = json.loads(transcript_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError):
-                pass
 
         return self.generate(
             raw,
@@ -270,15 +335,51 @@ class ReportGenerator:
             return []
         return sorted(p.name for p in self._templates_dir.glob("*.html"))
 
+    def _load_vendor_file(self, name: str) -> str:
+        """Load a vendored JS file from the vendor directory, with caching."""
+        if name in self._vendor_cache:
+            return self._vendor_cache[name]
+        filename = _VENDOR_FILES.get(name, "")
+        if not filename:
+            return ""
+        vendor_dir = self._templates_dir / "vendor"
+        path = vendor_dir / filename
+        if not path.is_file():
+            return ""
+        content = path.read_text(encoding="utf-8")
+        self._vendor_cache[name] = content
+        return content
+
     def _render(self, report_data: ReportData, template_name: str) -> str:
-        """Render a template with the given report data."""
+        """Render a template with the given report data.
+
+        Loads vendored JS libraries and passes them as template context so
+        they can be inlined directly in ``<script>`` tags.  The template never
+        references external CDN URLs.
+        """
         try:
             template = self._jinja_env.get_template(template_name)
         except TemplateNotFound as exc:
             raise FileNotFoundError(
                 f"Report template '{template_name}' not found in {self._templates_dir}"
             ) from exc
-        return template.render(report=report_data, **report_data.to_dict())
+
+        engine = self.visualization_engine
+        vendor_d3 = self._load_vendor_file("d3_js")
+        vendor_three = ""
+        vendor_orbit = ""
+        if engine != "d3":
+            vendor_three = self._load_vendor_file("three_js")
+            vendor_orbit = self._load_vendor_file("orbit_controls_js")
+
+        return template.render(
+            report=report_data,
+            **report_data.to_dict(),
+            visualization_engine=engine,
+            vendor_d3_js=vendor_d3,
+            vendor_three_js=vendor_three,
+            vendor_orbit_controls_js=vendor_orbit,
+        )
 
 
 def _to_json_filter(value: Any, indent: int = 2) -> str:

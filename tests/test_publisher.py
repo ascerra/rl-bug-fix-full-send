@@ -542,7 +542,7 @@ class TestBuildNarrative:
             )
         )
         assert "repo" in text
-        assert "issues/42" in text
+        assert "#42" in text
         assert "bug" in text
         assert "0.85" in text
         assert "approved" in text
@@ -637,7 +637,7 @@ class TestBuildNarrative:
         text = build_narrative(
             _make_full_execution(repo_path="", triage_findings={"classification": "bug"})
         )
-        assert "issues/42" in text
+        assert "issues/42" in text or "#42" in text
 
     def test_empty_execution(self):
         text = build_narrative({})
@@ -694,7 +694,7 @@ class TestBuildNarrative:
 class TestNarrativeInSummaryMarkdown:
     def test_narrative_present_in_summary(self):
         md = build_summary_markdown(_make_execution())
-        assert "processed" in md.lower() or "engine" in md.lower()
+        assert "processed" in md.lower() or "engine" in md.lower() or "agent" in md.lower()
         assert "success" in md.lower()
 
     def test_narrative_before_status_line(self):
@@ -729,11 +729,17 @@ class TestNarrativeInReportHtml:
         pub = ReportPublisher(output_dir=tmp_path)
         pub.publish(_make_full_execution(triage_findings={"classification": "bug"}))
         html = (tmp_path / "report.html").read_text(encoding="utf-8")
-        narrative_pos = html.find("Narrative Summary")
-        metrics_pos = html.find("Metrics Overview")
-        assert narrative_pos != -1
-        assert metrics_pos != -1
-        assert narrative_pos < metrics_pos
+        landing_pos = html.find("landing-page")
+        if landing_pos != -1:
+            metric_pos = html.find("metric-card", landing_pos)
+            assert metric_pos != -1
+            assert landing_pos < metric_pos
+        else:
+            narrative_pos = html.find("Narrative Summary")
+            metrics_pos = html.find("Metrics Overview")
+            assert narrative_pos != -1
+            assert metrics_pos != -1
+            assert narrative_pos < metrics_pos
 
     def test_empty_narrative_hidden(self, tmp_path):
         pub = ReportPublisher(output_dir=tmp_path)

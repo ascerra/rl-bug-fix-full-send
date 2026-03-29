@@ -1,1 +1,1 @@
-"""Ralph Loop execution phases."""
+"""Pipeline execution phases."""

@@ -50,6 +50,9 @@ jobs:
     name: Execute Ralph Loop
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    outputs:
+      status: ${{ steps.loop.outputs.status }}
+      pr_number: ${{ steps.loop.outputs.pr_number }}
 
     steps:
       - name: Checkout engine
@@ -160,4 +163,72 @@ jobs:
           if [ -f ./output/reports/summary.md ]; then
             echo "" >> "$GITHUB_STEP_SUMMARY"
             cat ./output/reports/summary.md >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+  observer:
+    name: Neutral Observer
+    needs: run-ralph-loop
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      id-token: write
+      contents: read
+      pull-requests: write
+
+    steps:
+      - name: Checkout engine
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        run: uv pip install --system -e ".[dev]"
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Download agent artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ralph-loop-execution-${{ github.run_id }}
+          path: ./agent-artifacts
+
+      - name: Run observer
+        id: observer
+        run: |
+          python -m engine.observer \
+            --artifacts-dir ./agent-artifacts \
+            --output-dir ./attestation \
+            --templates-dir ./templates/prompts \
+            --branch-dir ./target-repo \
+            --config .rl-config.yaml
+          echo "Observer completed"
+          if [ -f ./attestation/summary.txt ]; then
+            cat ./attestation/summary.txt >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Upload attestation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: observer-attestation-${{ github.run_id }}
+          path: ./attestation/
+          retention-days: 30
+
+      - name: Post policy result to PR
+        if: needs.run-ralph-loop.outputs.pr_number != ''
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
+        run: |
+          PR_NUM="${{ needs.run-ralph-loop.outputs.pr_number }}"
+          REPO="${{ needs.run-ralph-loop.outputs.repo }}"
+          if [ -n "$PR_NUM" ] && [ -f ./attestation/pr-comment.md ]; then
+            gh pr comment "$PR_NUM" --repo "$REPO" --body-file ./attestation/pr-comment.md || true
           fi

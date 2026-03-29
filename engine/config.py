@@ -1,4 +1,4 @@
-"""Configuration loading and validation for the Ralph Loop engine."""
+"""Configuration loading and validation for the RL Bug Fix engine."""
 
 from __future__ import annotations
 
@@ -40,6 +40,7 @@ class SecurityConfig:
 
 @dataclass
 class ReportingConfig:
+    visualization_engine: str = "threejs"  # "threejs" (3D) | "d3" (legacy 2D)
     decision_tree: bool = True
     action_map: bool = True
     comparison_mode: bool = False
@@ -130,6 +131,46 @@ class PhasesConfig:
 
 
 @dataclass
+class CIRemediationConfig:
+    enabled: bool = True
+    max_iterations: int = 3
+    time_budget_minutes: int = 15
+    ci_poll_interval_seconds: int = 30
+    ci_poll_timeout_minutes: int = 20
+    rerun_on_infrastructure_flake: bool = True
+    max_flake_reruns: int = 2
+    failure_categories: dict[str, str] = field(
+        default_factory=lambda: {
+            "test_failure": "remediate",
+            "build_error": "remediate",
+            "lint_violation": "remediate",
+            "infrastructure_flake": "rerun",
+            "timeout": "escalate",
+        }
+    )
+
+
+@dataclass
+class ObserverConfig:
+    enabled: bool = True
+    signing_method: str = "sigstore"
+    policy_file: str = "templates/policies/default.yaml"
+    cross_checks: dict[str, bool] = field(
+        default_factory=lambda: {
+            "diff_consistency": True,
+            "action_completeness": True,
+            "phase_ordering": True,
+            "token_plausibility": True,
+            "tool_call_integrity": True,
+        }
+    )
+    model_allowlist: list[str] = field(default_factory=list)
+    prompt_template_digests: dict[str, str] = field(default_factory=dict)
+    post_policy_result_to_pr: bool = True
+    fail_on_policy_violation: bool = False
+
+
+@dataclass
 class EngineConfig:
     llm: LLMConfig = field(default_factory=LLMConfig)
     loop: LoopConfig = field(default_factory=LoopConfig)
@@ -137,6 +178,8 @@ class EngineConfig:
     reporting: ReportingConfig = field(default_factory=ReportingConfig)
     phases: PhasesConfig = field(default_factory=PhasesConfig)
     integrations: IntegrationsConfig = field(default_factory=IntegrationsConfig)
+    observer: ObserverConfig = field(default_factory=ObserverConfig)
+    ci_remediation: CIRemediationConfig = field(default_factory=CIRemediationConfig)
 
 
 def load_config(
@@ -198,6 +241,10 @@ def _apply_raw_config(config: EngineConfig, raw: dict[str, Any]) -> EngineConfig
         _apply_phases_config(config.phases, raw["phases"])
     if "integrations" in raw:
         _apply_integrations_config(config.integrations, raw["integrations"])
+    if "observer" in raw:
+        _apply_observer_config(config.observer, raw["observer"])
+    if "ci_remediation" in raw:
+        _apply_ci_remediation_config(config.ci_remediation, raw["ci_remediation"])
     return config
 
 
@@ -237,3 +284,23 @@ def _apply_integrations_config(
             for k, v in raw_integrations[integration_key].items():
                 if hasattr(integration_cfg, k):
                     setattr(integration_cfg, k, v)
+
+
+def _apply_observer_config(observer: ObserverConfig, raw_observer: dict[str, Any]) -> None:
+    """Apply raw YAML observer section into ObserverConfig."""
+    for k, v in raw_observer.items():
+        if hasattr(observer, k):
+            setattr(observer, k, v)
+
+
+def _apply_ci_remediation_config(ci_remediation: CIRemediationConfig, raw: dict[str, Any]) -> None:
+    """Apply raw YAML ci_remediation section into CIRemediationConfig.
+
+    For ``failure_categories``, merges into the defaults rather than replacing,
+    so unspecified categories keep their default action.
+    """
+    for k, v in raw.items():
+        if k == "failure_categories" and isinstance(v, dict):
+            ci_remediation.failure_categories.update(v)
+        elif hasattr(ci_remediation, k):
+            setattr(ci_remediation, k, v)

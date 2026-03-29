@@ -522,7 +522,8 @@ class TestValidateAct:
         assert result["pr_created"] is False
 
     @pytest.mark.asyncio
-    async def test_act_records_actions(self, tmp_path):
+    async def test_act_records_actions(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("GH_PAT", "fake-token-for-test")
         phase = _make_validate_with_repo(tmp_path)
         result = await phase.act(
             {
@@ -544,6 +545,7 @@ class TestValidateAct:
     async def test_act_cross_fork_pr_head(self, tmp_path, monkeypatch):
         """When RL_FORK_REPO is set, PR head uses 'fork_owner:branch' format."""
         monkeypatch.setenv("RL_FORK_REPO", "myuser/build-definitions")
+        monkeypatch.setenv("GH_PAT", "fake-token-for-test")
         phase = _make_validate_with_repo(tmp_path)
         result = await phase.act(
             {

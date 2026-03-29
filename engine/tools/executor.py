@@ -1,4 +1,4 @@
-"""Sandboxed tool execution for Ralph Loop phases.
+"""Sandboxed tool execution for pipeline phases.
 
 Each tool execution is logged via the tracer. File operations are sandboxed
 to the repo path. Shell commands run with configurable timeout and output capture.

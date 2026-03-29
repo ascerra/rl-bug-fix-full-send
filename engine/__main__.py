@@ -1,4 +1,4 @@
-"""CLI entry point for the Ralph Loop engine."""
+"""CLI entry point for the RL Bug Fix engine."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import yaml
 from engine.config import load_config
 from engine.integrations.llm import create_provider
 from engine.loop import RalphLoop
+from engine.phases.ci_remediate import CIRemediatePhase
 from engine.phases.implement import ImplementPhase
 from engine.phases.report import ReportPhase
 from engine.phases.review import ReviewPhase
@@ -24,7 +25,7 @@ from engine.workflow.monitor import WorkflowMonitor
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="rl-engine",
-        description="Ralph Loop Bug Fix Engine — agentic SDLC for GitHub organizations",
+        description="RL Bug Fix Engine — agentic SDLC for GitHub organizations",
     )
     parser.add_argument("--issue-url", required=True, help="GitHub issue URL to process")
     parser.add_argument("--target-repo", required=True, help="Path to cloned target repository")
@@ -106,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
     loop.register_phase("implement", ImplementPhase)
     loop.register_phase("review", ReviewPhase)
     loop.register_phase("validate", ValidatePhase)
+    loop.register_phase("ci_remediate", CIRemediatePhase)
     loop.register_phase("report", ReportPhase)
 
     execution = asyncio.run(loop.run())

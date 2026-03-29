@@ -266,15 +266,67 @@
   </div>
 </div>
 
-<!-- Narrative Summary -->
-{% if report.narrative %}
+<!-- Landing Page: Narrative Summary -->
+{% if report.landing_data and report.landing_data.get('story') %}
+<div id="landing-page">
+  <div class="card" style="border-left: 3px solid var(--accent); padding: 1.25rem 1.5rem; margin-bottom: 1.5rem;">
+    <p class="detail-narrative" style="font-size: 1rem; line-height: 1.8; margin: 0;">{{ report.landing_data.story }}</p>
+  </div>
+
+  <!-- Metrics Cards -->
+  {% if report.landing_data.get('metrics_cards') %}
+  <div class="card-grid" style="margin-bottom: 1.5rem;">
+    {% for card in report.landing_data.metrics_cards %}
+    <div class="card metric-card">
+      <div class="metric-value{% if card.status == 'failure' %}" style="color: var(--failure){% elif card.status == 'escalated' %}" style="color: var(--escalated){% elif card.status == 'timeout' %}" style="color: var(--warning){% endif %}">{{ card.value }}</div>
+      <div class="metric-label">{{ card.label }}{% if card.unit %} ({{ card.unit }}){% endif %}</div>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <!-- Phase Timeline Bar -->
+  {% if report.landing_data.get('phase_bars') %}
+  <div class="card" style="margin-bottom: 1.5rem;">
+    <h3 style="margin-bottom: 0.75rem; font-size: 0.85rem; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em;">Time per Phase{% if report.landing_data.total_duration_display %} — {{ report.landing_data.total_duration_display }} total{% endif %}</h3>
+    <div style="display: flex; height: 32px; border-radius: 6px; overflow: hidden; background: var(--bg); border: 1px solid var(--border);">
+      {% for bar in report.landing_data.phase_bars %}
+      {% if bar.percent > 0 %}
+      <div title="{{ bar.phase }}: {{ bar.duration_ms|format_duration }} ({{ bar.iterations }} iter)" style="width: {{ bar.percent }}%; background: {{ bar.color }}; opacity: 0.85; display: flex; align-items: center; justify-content: center; font-size: 0.7rem; font-weight: 600; color: #fff; text-shadow: 0 1px 2px rgba(0,0,0,0.5); min-width: {% if bar.percent > 8 %}0{% else %}0{% endif %}px; overflow: hidden; white-space: nowrap;">{% if bar.percent > 10 %}{{ bar.phase }}{% endif %}</div>
+      {% endif %}
+      {% endfor %}
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 0.75rem; margin-top: 0.5rem;">
+      {% for bar in report.landing_data.phase_bars %}
+      <span style="font-size: 0.75rem; color: var(--text-muted); display: flex; align-items: center; gap: 0.3rem;">
+        <span style="width: 10px; height: 10px; border-radius: 2px; background: {{ bar.color }}; display: inline-block;"></span>
+        {{ bar.phase }} ({{ bar.duration_ms|format_duration }})
+      </span>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
+
+  <!-- Comparison Summary (landing) -->
+  {% if report.landing_data.get('comparison_summary') %}
+  <div class="card" style="border-left: 3px solid var(--escalated); margin-bottom: 1.5rem;">
+    <p class="detail-narrative" style="margin: 0;">{{ report.landing_data.comparison_summary }}</p>
+  </div>
+  {% endif %}
+
+  <!-- Enter 3D View button (only for threejs mode) -->
+  {% if visualization_engine != 'd3' and report.scene_data and report.scene_data.get('platforms') %}
+  <div style="text-align: center; margin: 2rem 0;">
+    <button id="enter-3d-btn" style="background: var(--accent); color: #0d1117; border: none; border-radius: 8px; padding: 0.75rem 2rem; font-size: 1rem; font-weight: 600; cursor: pointer; transition: opacity 0.2s, transform 0.2s;" onmouseover="this.style.opacity='0.85';this.style.transform='scale(1.02)'" onmouseout="this.style.opacity='1';this.style.transform='scale(1)'">Enter 3D View</button>
+  </div>
+  {% endif %}
+</div>
+{% elif report.narrative %}
+<!-- Fallback: simple narrative when landing_data is unavailable -->
 <h2>Narrative Summary</h2>
 <div class="card" style="border-left: 3px solid var(--accent); padding: 1rem 1.25rem;">
   <p class="detail-narrative">{{ report.narrative }}</p>
 </div>
-{% endif %}
-
-<!-- Metrics Overview -->
 <div class="card-grid">
   <div class="card metric-card">
     <div class="metric-value">{{ report.total_iterations }}</div>
@@ -293,6 +345,7 @@
     <div class="metric-label">Total Tokens</div>
   </div>
 </div>
+{% endif %}
 
 <!-- Phase Summary -->
 <h2>Phase Summary</h2>
@@ -352,6 +405,18 @@
     <p class="detail-hint">Click an action in the map to view its details here.</p>
   </div>
 </div>
+
+<!-- 3D Execution Landscape (Three.js) — only when visualization_engine == "threejs" -->
+{% if visualization_engine != 'd3' and report.scene_data and report.scene_data.get('platforms') %}
+<h2>3D Execution Landscape</h2>
+<div class="card" style="padding:0;overflow:hidden;position:relative">
+  <div id="scene-3d-container" style="min-height:600px;background:#0d1117"></div>
+  <p style="color:var(--text-muted);font-size:0.85rem;padding:0.75rem 1rem;margin:0;border-top:1px solid var(--border)">
+    Click any object to inspect its details. Use arrow keys to navigate between actions. Orbit: drag | Zoom: scroll | Pan: right-drag.
+    {% if report.timeline_data and report.timeline_data.get('total_duration_ms') %}Use the timeline bar to scrub through execution time or press play to animate.{% endif %}
+  </p>
+</div>
+{% endif %}
 
 <!-- Comparison Report -->
 {% if report.comparison.get('enabled') %}
@@ -637,7 +702,10 @@
   {% if report.completed_at %} | Completed {{ report.completed_at[:19] }}{% endif %}
 </footer>
 
-<script src="https://d3js.org/d3.v7.min.js"></script>
+<!-- D3.js (vendored, self-contained — no CDN) -->
+<script>
+{% autoescape false %}{{ vendor_d3_js }}{% endautoescape %}
+</script>
 <script>
 {% autoescape false %}
 {% include 'decision-tree.js' %}
@@ -660,6 +728,97 @@
   }
 })();
 </script>
+{% if visualization_engine != 'd3' and report.scene_data and report.scene_data.get('platforms') %}
+<!-- Three.js + OrbitControls (vendored, self-contained — no CDN) -->
+<script>
+{% autoescape false %}{{ vendor_three_js }}{% endautoescape %}
+</script>
+<script>
+{% autoescape false %}{{ vendor_orbit_controls_js }}{% endautoescape %}
+</script>
+<script>
+{% autoescape false %}
+{% include 'scene-renderer.js' %}
+{% endautoescape %}
+</script>
+<script>
+{% autoescape false %}
+{% include 'detail-panel.js' %}
+{% endautoescape %}
+</script>
+<script>
+{% autoescape false %}
+{% include 'timeline.js' %}
+{% endautoescape %}
+</script>
+<script>
+(function() {
+  var sceneData = {{ report.scene_data | to_json_safe | safe }};
+  if (!sceneData || typeof THREE === 'undefined' || typeof renderScene !== 'function') return;
+
+  var renderer = renderScene(sceneData, 'scene-3d-container', 'scene-3d-detail');
+  if (!renderer || typeof RalphDetailPanel === 'undefined') return;
+
+  var actionList = RalphDetailPanel.buildActionList(sceneData);
+  var detailPanel = new RalphDetailPanel.DetailPanel();
+  detailPanel.init(actionList);
+
+  var timeline = null;
+  {% if report.timeline_data and report.timeline_data.get('total_duration_ms') %}
+  var timelineData = {{ report.timeline_data | to_json_safe | safe }};
+  if (typeof renderTimeline === 'function') {
+    timeline = renderTimeline(timelineData, 'scene-3d-container', {
+      onTimeChange: function(timeMs) {
+        if (!renderer || !renderer.clickables) return;
+        for (var i = 0; i < renderer.clickables.length; i++) {
+          var obj = renderer.clickables[i];
+          var ud = obj.userData;
+          if (ud.type !== 'action') continue;
+          var evtMs = ud.timestamp ? Date.parse(ud.timestamp) : 0;
+          var startMs = timelineData.start_time ? Date.parse(timelineData.start_time) : 0;
+          var offsetMs = evtMs - startMs;
+          obj.visible = offsetMs <= timeMs;
+        }
+      }
+    });
+  }
+  {% endif %}
+
+  var origClick = renderer._boundOnClick;
+  renderer.renderer.domElement.removeEventListener('click', origClick);
+  renderer.renderer.domElement.addEventListener('click', function() {
+    renderer.raycaster.setFromCamera(renderer.mouse, renderer.camera);
+    var intersects = renderer.raycaster.intersectObjects(renderer.clickables, false);
+
+    if (renderer.selectedObject) {
+      renderer.selectedObject.material.emissiveIntensity =
+        renderer.selectedObject.userData.originalEmissive || 0.15;
+      renderer.selectedObject = null;
+    }
+
+    if (intersects.length > 0) {
+      var hit = intersects[0].object;
+      renderer.selectedObject = hit;
+      hit.material.emissiveIntensity = (hit.userData.originalEmissive || 0.15) + 0.4;
+      detailPanel.open(hit.userData);
+      if (timeline && hit.userData.id) {
+        timeline.seekToEvent(hit.userData.id);
+      }
+    }
+  });
+})();
+</script>
+<script>
+(function() {
+  var btn = document.getElementById('enter-3d-btn');
+  var target = document.getElementById('scene-3d-container');
+  if (!btn || !target) return;
+  btn.addEventListener('click', function() {
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  });
+})();
+</script>
+{% endif %}
 
 </body>
 </html>

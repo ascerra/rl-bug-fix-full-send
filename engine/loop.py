@@ -1,13 +1,18 @@
-"""Ralph Loop engine — the core iterative execution cycle.
+"""Core phased pipeline engine — orchestrates the bug fix workflow.
 
-Implements: OBSERVE → PLAN → ACT → VALIDATE → REFLECT
-Manages phase transitions, iteration caps, time budgets, and escalation.
+Runs a sequential pipeline of phases (triage → implement → review → validate → report),
+each executing an OODA cycle (observe → plan → act → validate → reflect).
+Manages phase transitions, bounded backtracking (implement↔review), iteration caps,
+time budgets, and escalation. After validate creates a PR, the engine monitors the
+target repo's CI and enters a CI remediation sub-loop if failures are detected.
+Developed and maintained using the Ralph Loop methodology.
 """
 
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -29,7 +34,7 @@ from engine.workflow.monitor import WorkflowMonitor
 
 @dataclass
 class ExecutionRecord:
-    """Complete record of a Ralph Loop execution."""
+    """Complete record of a pipeline execution."""
 
     id: str = field(default_factory=lambda: str(uuid.uuid4()))
     started_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
@@ -63,9 +68,9 @@ PHASE_ORDER = ["triage", "implement", "review", "validate", "report"]
 
 
 class RalphLoop:
-    """The Ralph Loop engine.
+    """The phased pipeline engine.
 
-    Executes phases in sequence, managing iteration within and across phases.
+    Executes phases in sequence, managing transitions and bounded backtracking.
     Enforces iteration caps and time budgets. Escalates when limits are reached.
 
     Phases are registered via a registry mapping phase name → Phase subclass.
@@ -119,7 +124,7 @@ class RalphLoop:
         self._phase_registry[name] = phase_class
 
     async def run(self) -> ExecutionRecord:
-        """Execute the full Ralph Loop.
+        """Execute the full phased pipeline.
 
         Runs phases in PHASE_ORDER sequence. Each iteration:
         1. Check time budget and iteration cap
@@ -292,6 +297,14 @@ class RalphLoop:
                     continue
 
             if result.success:
+                if phase_name == "validate" and self._pr_was_created(result):
+                    ci_outcome = await self._run_ci_monitoring_loop(result, phase_results)
+                    if ci_outcome == "escalated":
+                        status = "escalated"
+                        break
+                    if ci_outcome == "timeout":
+                        status = "timeout"
+                        break
                 current_phase_idx += 1
                 self._consecutive_retries = 0
             else:
@@ -463,6 +476,454 @@ class RalphLoop:
         """Check if the time budget has been exceeded."""
         elapsed_minutes = (time.monotonic() - self._start_time) / 60
         return elapsed_minutes > self.config.loop.time_budget_minutes
+
+    # ------------------------------------------------------------------
+    # CI monitoring and remediation sub-loop
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _pr_was_created(validate_result: PhaseResult) -> bool:
+        """Check whether the validate phase successfully created a PR."""
+        return bool(validate_result.artifacts.get("pr_created"))
+
+    async def _run_ci_monitoring_loop(
+        self,
+        validate_result: PhaseResult,
+        phase_results: list[PhaseResult],
+    ) -> str:
+        """Monitor CI on the PR branch and remediate failures.
+
+        Runs independently of the main loop with its own iteration cap
+        and time budget from ``CIRemediationConfig``.
+
+        Returns:
+          ``"success"`` — CI passed (or CI monitoring disabled/unavailable)
+          ``"escalated"`` — CI remediation cap exceeded, escalated to human
+          ``"timeout"`` — CI remediation time budget exceeded
+        """
+        ci_config = self.config.ci_remediation
+        if not ci_config.enabled:
+            self.logger.info("CI remediation disabled — skipping CI monitoring")
+            return "success"
+
+        gh_token = os.environ.get("GH_PAT", "") or os.environ.get("GITHUB_TOKEN", "")
+        if not gh_token:
+            self.logger.info("No GitHub token — skipping CI monitoring")
+            return "success"
+
+        pr_url = validate_result.artifacts.get("pr_url", "")
+        branch_name = self._extract_branch_from_pr(validate_result)
+        repo_parts = self._extract_repo_parts_from_url(pr_url)
+
+        if not branch_name or not repo_parts:
+            self.logger.info("Cannot determine branch/repo for CI monitoring — skipping")
+            return "success"
+
+        owner, repo = repo_parts
+
+        from engine.workflow.ci_monitor import (
+            CIMonitor,
+            CIRemediationAttempt,
+            CIRemediationHistory,
+            build_ci_pr_comment,
+        )
+
+        ci_monitor = CIMonitor(
+            token=gh_token,
+            owner=owner,
+            repo=repo,
+            config=ci_config,
+            logger=self.logger,
+        )
+
+        original_diff = validate_result.artifacts.get("diff", "")
+        original_desc = validate_result.artifacts.get("pr_description", "")
+
+        ci_start = time.monotonic()
+        ci_time_budget_s = ci_config.time_budget_minutes * 60
+        flake_reruns = 0
+        ci_attempts: list[CIRemediationAttempt] = []
+        last_failure_details = None
+
+        self.logger.write_progress_heading("## CI Monitoring")
+        self.logger.narrate(
+            f"Monitoring CI for branch {branch_name} "
+            f"(max {ci_config.max_iterations} remediation iterations, "
+            f"{ci_config.time_budget_minutes}m budget)"
+        )
+
+        pr_number = self._extract_pr_number_from_url(pr_url)
+        outcome = "success"
+
+        for ci_iter in range(1, ci_config.max_iterations + 1):
+            ci_elapsed = time.monotonic() - ci_start
+            if ci_elapsed > ci_time_budget_s:
+                self.logger.narrate("CI remediation time budget exceeded.")
+                self._record_escalation(
+                    f"CI remediation time budget exceeded ({ci_config.time_budget_minutes}m)",
+                    phase_results,
+                )
+                outcome = "timeout"
+                break
+
+            if self._check_time_budget():
+                self.logger.narrate("Main loop time budget exceeded during CI monitoring.")
+                self._record_escalation(
+                    "Main time budget exceeded during CI monitoring",
+                    phase_results,
+                )
+                outcome = "timeout"
+                break
+
+            self.logger.narrate(f"Polling CI status (attempt {ci_iter})...")
+            ci_result = await ci_monitor.poll_ci_status(branch_name)
+
+            self.tracer.record_action(
+                action_type="ci_poll",
+                description=f"CI poll iteration {ci_iter}: {ci_result.overall_state}",
+                input_context={"ref": branch_name, "iteration": ci_iter},
+                output_success=ci_result.passed,
+            )
+
+            if ci_result.passed:
+                self.logger.narrate("CI passed. Continuing to report phase.")
+                outcome = "success"
+                break
+
+            if not ci_result.completed:
+                self.logger.narrate(
+                    f"CI poll timed out (not all checks completed). "
+                    f"State: {ci_result.overall_state}"
+                )
+                self._record_escalation(
+                    f"CI poll timeout — checks did not complete within "
+                    f"{ci_config.ci_poll_timeout_minutes}m",
+                    phase_results,
+                )
+                outcome = "escalated"
+                break
+
+            category = ci_monitor.categorize_failure(ci_result)
+            failure_details = ci_monitor.extract_failure_details(ci_result, category)
+            last_failure_details = failure_details
+
+            self.logger.narrate(f"CI failed: {category.value} — {failure_details.summary[:200]}")
+
+            action = ci_config.failure_categories.get(
+                category.value,
+                failure_details.recommended_action,
+            )
+
+            if action == "escalate":
+                self.logger.narrate(f"Escalating: {category.value} failure.")
+                self._record_escalation(
+                    f"CI failure escalated: {category.value} — {failure_details.summary[:200]}",
+                    phase_results,
+                )
+                outcome = "escalated"
+                break
+
+            if action == "rerun":
+                if flake_reruns >= ci_config.max_flake_reruns:
+                    self.logger.narrate(f"Max flake reruns ({ci_config.max_flake_reruns}) reached.")
+                    self._record_escalation(
+                        f"CI flake rerun limit reached ({ci_config.max_flake_reruns})",
+                        phase_results,
+                    )
+                    outcome = "escalated"
+                    break
+
+                flake_reruns += 1
+                for run_id in ci_result.workflow_run_ids[:1]:
+                    self.logger.narrate(
+                        f"Triggering CI rerun for workflow {run_id} "
+                        f"(flake rerun {flake_reruns}/{ci_config.max_flake_reruns})"
+                    )
+                    await ci_monitor.trigger_rerun(run_id)
+                continue
+
+            remediation_result = await self._execute_ci_remediation(
+                failure_details=failure_details,
+                category=category,
+                branch_name=branch_name,
+                original_diff=original_diff,
+                original_desc=original_desc,
+                ci_iter=ci_iter,
+                phase_results=phase_results,
+            )
+            phase_results.append(remediation_result)
+
+            ci_attempts.append(
+                CIRemediationAttempt(
+                    iteration=ci_iter,
+                    category=category.value,
+                    summary=failure_details.summary[:300],
+                    failing_checks=failure_details.failing_checks[:10],
+                    failing_tests=failure_details.failing_tests[:20],
+                    action_taken=remediation_result.findings.get("action", ""),
+                    files_changed=remediation_result.artifacts.get("files_changed", []),
+                    fix_pushed=remediation_result.artifacts.get("pushed", False),
+                    success=remediation_result.success,
+                )
+            )
+
+            if not remediation_result.success:
+                self.logger.narrate(
+                    "CI remediation attempt failed — "
+                    f"will retry ({ci_iter}/{ci_config.max_iterations})"
+                )
+
+            needs_rerun = remediation_result.artifacts.get("needs_rerun", False)
+            if needs_rerun:
+                if flake_reruns >= ci_config.max_flake_reruns:
+                    self.logger.narrate("Max flake reruns reached after remediation.")
+                    self._record_escalation(
+                        "CI flake rerun limit reached after remediation",
+                        phase_results,
+                    )
+                    outcome = "escalated"
+                    break
+                flake_reruns += 1
+                for run_id in ci_result.workflow_run_ids[:1]:
+                    await ci_monitor.trigger_rerun(run_id)
+        else:
+            self.logger.narrate(
+                f"CI remediation iteration cap ({ci_config.max_iterations}) reached."
+            )
+            self._record_escalation(
+                f"CI remediation iteration cap reached ({ci_config.max_iterations})",
+                phase_results,
+            )
+            outcome = "escalated"
+
+        ci_elapsed_total = time.monotonic() - ci_start
+
+        if ci_attempts or outcome != "success":
+            escalation_reason = ""
+            if outcome in ("escalated", "timeout"):
+                for action in reversed(self.tracer.get_actions_as_dicts()):
+                    if action.get("type") == "escalation":
+                        escalation_reason = action.get("description", "")[:300]
+                        break
+
+            history = CIRemediationHistory(
+                outcome=outcome,
+                total_iterations=len(ci_attempts),
+                flake_reruns=flake_reruns,
+                elapsed_seconds=ci_elapsed_total,
+                attempts=ci_attempts,
+                final_failure=last_failure_details,
+                escalation_reason=escalation_reason,
+            )
+
+            await self._post_ci_pr_comment(
+                owner=owner,
+                repo=repo,
+                pr_number=pr_number,
+                history=history,
+                gh_token=gh_token,
+                build_comment_fn=build_ci_pr_comment,
+            )
+
+        return outcome
+
+    async def _execute_ci_remediation(
+        self,
+        failure_details: Any,
+        category: Any,
+        branch_name: str,
+        original_diff: str,
+        original_desc: str,
+        ci_iter: int,
+        phase_results: list[PhaseResult],
+    ) -> PhaseResult:
+        """Execute the CI remediation phase with failure context."""
+        phase_cls = self._phase_registry.get("ci_remediate")
+        if phase_cls is None:
+            self.logger.warn("No ci_remediate phase registered — cannot remediate")
+            return PhaseResult(
+                phase="ci_remediate",
+                success=False,
+                should_continue=False,
+                findings={"skipped": True, "reason": "Phase not registered"},
+            )
+
+        self._total_iterations += 1
+        self.logger.set_iteration(self._total_iterations)
+        self.tracer.set_iteration(self._total_iterations)
+        self.metrics.record_iteration("ci_remediate")
+
+        self.logger.write_progress_heading(
+            f"## Iteration {self._total_iterations} — ci_remediate (CI iter {ci_iter})"
+        )
+
+        issue_data: dict[str, Any] = {
+            "url": self.issue_url,
+            "ci_failure_details": failure_details.to_dict(),
+            "ci_failure_category": str(category.value),
+            "branch_name": branch_name,
+            "original_diff": original_diff,
+            "original_description": original_desc,
+            "remediation_iteration": ci_iter,
+        }
+
+        try:
+            phase_tools = phase_cls.get_allowed_tools() or None
+            tool_executor = ToolExecutor(
+                repo_path=self.repo_path,
+                logger=self.logger,
+                tracer=self.tracer,
+                metrics=self.metrics,
+                allowed_tools=phase_tools,
+                redactor=self._redactor,
+            )
+
+            phase = phase_cls(
+                llm=self.llm,
+                logger=self.logger,
+                tracer=self.tracer,
+                repo_path=self.repo_path,
+                issue_data=issue_data,
+                prior_phase_results=phase_results,
+                tool_executor=tool_executor,
+                config=self.config,
+                metrics=self.metrics,
+                transcript=self.transcript,
+            )
+
+            iteration_started = datetime.now(UTC).isoformat()
+            phase_start = time.monotonic()
+
+            result = await phase.execute()
+            result.phase = "ci_remediate"
+
+            phase_duration_ms = (time.monotonic() - phase_start) * 1000
+            self.metrics.record_phase_time("ci_remediate", phase_duration_ms)
+
+            self.execution.iterations.append(
+                {
+                    "number": self._total_iterations,
+                    "phase": "ci_remediate",
+                    "started_at": iteration_started,
+                    "completed_at": datetime.now(UTC).isoformat(),
+                    "duration_ms": round(phase_duration_ms, 2),
+                    "result": {
+                        "success": result.success,
+                        "should_continue": result.should_continue,
+                        "next_phase": result.next_phase,
+                        "escalate": result.escalate,
+                        "escalation_reason": result.escalation_reason or "",
+                    },
+                    "findings": _truncate_dict(result.findings, max_str_len=2000),
+                    "artifacts": _truncate_dict(result.artifacts, max_str_len=2000),
+                }
+            )
+
+            elapsed_min = (time.monotonic() - self._start_time) / 60
+            self.logger.narrate(
+                f"CI remediation "
+                f"{'succeeded' if result.success else 'failed'} "
+                f"({phase_duration_ms:.0f}ms, {elapsed_min:.1f}m elapsed)"
+            )
+
+            return result
+
+        except Exception as exc:
+            self.logger.error(f"CI remediation phase raised: {exc}")
+            self.metrics.record_error(str(exc))
+            return PhaseResult(
+                phase="ci_remediate",
+                success=False,
+                should_continue=False,
+                escalate=True,
+                escalation_reason=f"CI remediation raised: {exc}",
+            )
+
+    @staticmethod
+    def _extract_branch_from_pr(validate_result: PhaseResult) -> str:
+        """Extract the branch name from validate phase artifacts.
+
+        The validate phase records git actions; we look for the branch
+        checkout action or fall back to scanning the PR URL.
+        """
+        pr_url = validate_result.artifacts.get("pr_url", "")
+        if not pr_url:
+            return ""
+        import re
+
+        branch_match = re.search(r"rl/fix-[\w-]+", pr_url)
+        if branch_match:
+            return branch_match.group(0)
+
+        for key in ("branch_name", "branch"):
+            val = validate_result.artifacts.get(key, "")
+            if val:
+                return val
+
+        return ""
+
+    @staticmethod
+    def _extract_pr_number_from_url(url: str) -> int:
+        """Extract the PR number from a GitHub PR URL.
+
+        Returns 0 if the URL does not contain a parseable PR number.
+        """
+        if "/pull/" not in url:
+            return 0
+        try:
+            segment = url.split("/pull/")[1].split("/")[0].split("?")[0]
+            return int(segment)
+        except (IndexError, ValueError):
+            return 0
+
+    async def _post_ci_pr_comment(
+        self,
+        *,
+        owner: str,
+        repo: str,
+        pr_number: int,
+        history: Any,
+        gh_token: str,
+        build_comment_fn: Any,
+    ) -> None:
+        """Post the CI remediation summary as a PR comment.
+
+        Failures are logged but never block loop completion.
+        """
+        if not pr_number:
+            self.logger.info("No PR number — skipping CI comment")
+            return
+
+        comment_body = build_comment_fn(history)
+
+        try:
+            from engine.integrations.github import GitHubAdapter
+
+            adapter = GitHubAdapter(owner=owner, repo=repo, token=gh_token)
+            result = await adapter.post_comment(pr_number, comment_body)
+            if result.get("success"):
+                self.logger.info("Posted CI remediation comment on PR", pr_number=pr_number)
+                self.logger.narrate(f"Posted CI remediation summary as comment on PR #{pr_number}.")
+            else:
+                self.logger.warn(
+                    f"Failed to post CI comment: {result.get('error', 'unknown')}",
+                    pr_number=pr_number,
+                )
+        except Exception as exc:
+            self.logger.warn(f"CI comment posting failed (non-blocking): {exc}")
+
+    @staticmethod
+    def _extract_repo_parts_from_url(url: str) -> tuple[str, str] | None:
+        """Extract (owner, repo) from a GitHub URL."""
+        if "github.com/" not in url:
+            return None
+        try:
+            parts = url.split("github.com/")[1].split("/")
+            if len(parts) >= 2:
+                return (parts[0], parts[1])
+        except (IndexError, ValueError):
+            pass
+        return None
 
     async def _check_workflow_health(self) -> dict[str, Any] | None:
         """Check CI workflow health via the WorkflowMonitor, if available.

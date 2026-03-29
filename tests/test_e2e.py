@@ -337,7 +337,14 @@ _GIT_ENV = {
 
 
 def _init_repo(tmp_path: Path, bug: dict[str, Any]) -> Path:
-    """Create a git repo populated with the bug scenario's files."""
+    """Create a git repo populated with the bug scenario's files.
+
+    A local bare remote is added so that ``git push origin`` succeeds
+    during validate-phase PR creation.
+    """
+    bare = tmp_path / "origin.git"
+    subprocess.run(["git", "init", "--bare", str(bare)], capture_output=True, check=True)
+
     repo = tmp_path / "repo"
     repo.mkdir()
     for rel_path, content in bug["files"].items():
@@ -345,9 +352,22 @@ def _init_repo(tmp_path: Path, bug: dict[str, Any]) -> Path:
         fpath.parent.mkdir(parents=True, exist_ok=True)
         fpath.write_text(content)
     subprocess.run(["git", "init"], cwd=str(repo), capture_output=True, check=True)
+    subprocess.run(
+        ["git", "remote", "add", "origin", str(bare)],
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
+    )
     subprocess.run(["git", "add", "."], cwd=str(repo), capture_output=True, check=True)
     subprocess.run(
         ["git", "commit", "-m", "initial"],
+        cwd=str(repo),
+        capture_output=True,
+        check=True,
+        env=_GIT_ENV,
+    )
+    subprocess.run(
+        ["git", "push", "-u", "origin", "HEAD"],
         cwd=str(repo),
         capture_output=True,
         check=True,
@@ -922,11 +942,33 @@ class TestEndToEndRobustness:
             "summary": "Fixed. Looks good now.",
         }
 
+        improved_impl = {
+            **bug["implement_response"],
+            "fix_description": "Added nil guard with explicit error return",
+            "file_changes": [
+                {
+                    "path": "pkg/controller/reconciler.go",
+                    "content": (
+                        "package controller\n\n"
+                        'import "fmt"\n\n'
+                        "func Reconcile(obj *Object) error {\n"
+                        "\tif obj == nil {\n"
+                        '\t\treturn fmt.Errorf("cannot reconcile nil object")\n'
+                        "\t}\n"
+                        "\tresult := obj.Process()\n"
+                        "\treturn result\n"
+                        "}\n"
+                    ),
+                }
+            ],
+            "diff_summary": "+4 lines (nil check with descriptive error)",
+        }
+
         responses = [
             json.dumps(bug["triage_response"]),
             json.dumps(bug["implement_response"]),
             json.dumps(reject_review),
-            json.dumps(bug["implement_response"]),
+            json.dumps(improved_impl),
             json.dumps(approve_review),
             json.dumps(bug["validate_response"]),
         ]

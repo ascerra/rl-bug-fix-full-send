@@ -41,6 +41,15 @@ agent_cmd() {
 
 cd "$PROJECT_DIR"
 
+# Reset stale completion signal from previous runs
+if [[ -f "progress/status.json" ]]; then
+  prev=$(python -c "import json,sys; print(json.load(open('progress/status.json')).get('ralphComplete',False))" 2>/dev/null || echo "False")
+  if [[ "$prev" == "True" ]]; then
+    echo "Clearing stale ralphComplete=true from previous run..."
+    echo '{"ralphComplete": false}' > progress/status.json
+  fi
+fi
+
 echo "╔══════════════════════════════════════════════════════════════╗"
 echo "║  Ralph Loop — rl-bug-fix-full-send meta loop                ║"
 echo "╠══════════════════════════════════════════════════════════════╣"

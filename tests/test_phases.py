@@ -152,7 +152,7 @@ class TestToolSets:
         assert len(REPORT_TOOLS) == 2
 
     def test_phase_tool_sets_has_all_phases(self):
-        expected = {"triage", "implement", "review", "validate", "report"}
+        expected = {"triage", "implement", "review", "validate", "report", "ci_remediate"}
         assert set(PHASE_TOOL_SETS.keys()) == expected
 
     def test_no_tool_set_has_unknown_tools(self):

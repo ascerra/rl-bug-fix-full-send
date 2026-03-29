@@ -1,4 +1,4 @@
-"""Base phase class for Ralph Loop phases."""
+"""Base phase class for pipeline phases."""
 
 from __future__ import annotations
 
@@ -37,6 +37,15 @@ VALIDATE_TOOLS: list[str] = [
     "github_api",
 ]
 REPORT_TOOLS: list[str] = ["file_read", "file_search"]
+CI_REMEDIATE_TOOLS: list[str] = [
+    "file_read",
+    "file_write",
+    "file_search",
+    "shell_run",
+    "git_diff",
+    "git_commit",
+    "github_api",
+]
 
 PHASE_TOOL_SETS: dict[str, list[str]] = {
     "triage": TRIAGE_TOOLS,
@@ -44,6 +53,7 @@ PHASE_TOOL_SETS: dict[str, list[str]] = {
     "review": REVIEW_TOOLS,
     "validate": VALIDATE_TOOLS,
     "report": REPORT_TOOLS,
+    "ci_remediate": CI_REMEDIATE_TOOLS,
 }
 
 
@@ -62,7 +72,7 @@ class PhaseResult:
 
 
 class Phase(ABC):
-    """Base class for all Ralph Loop phases.
+    """Base class for all pipeline phases.
 
     Each phase implements the OBSERVE -> PLAN -> ACT -> VALIDATE -> REFLECT cycle
     with phase-specific logic. Phases operate under zero trust: they re-read

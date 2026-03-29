@@ -555,6 +555,7 @@ class TestPostPrCiMonitoring:
         result = await phase._check_post_pr_ci(
             {"issue": {"url": "https://github.com/test/repo/issues/42"}},
             [],
+            "rl/fix-42-abc12345",
         )
         assert result == {}
 

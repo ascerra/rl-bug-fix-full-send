@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# Meta Loop — Production Ralph Loop CI Runner
+# Meta Ralph Loop — Production Engine CI Runner
 #
 # Triggers the ralph-loop.yml workflow in GitHub Actions, monitors the run,
-# downloads artifacts, and analyzes the results. Designed to be run
-# repeatedly as part of the meta development loop:
+# downloads artifacts, and analyzes the results. This IS the Ralph Loop —
+# the iterative development methodology that builds and maintains the
+# production engine. Designed to be run repeatedly:
 #
 #   1. Make engine changes locally
 #   2. Push to GitHub
@@ -25,6 +26,8 @@
 #   --watch               Wait for completion and download artifacts (default: true)
 #   --no-watch            Trigger only, don't wait
 #   --output-dir DIR      Where to save downloaded artifacts (default: ./meta-loop-runs)
+#   --task DESCRIPTION     Run the agent in task mode first: implement the described task,
+#                          push changes, then trigger the production job to validate
 #   --continuous           Run continuously: trigger → wait → analyze → auto-fix → push → repeat
 #   --max-runs N          Max continuous runs (default: 10)
 #   --auto-push           Automatically commit and push agent changes between runs
@@ -53,6 +56,7 @@ REPO="${META_LOOP_REPO:-}"
 REF="${META_LOOP_REF:-main}"
 WATCH=true
 OUTPUT_DIR="$PROJECT_DIR/meta-loop-runs"
+TASK=""
 CONTINUOUS=false
 MAX_RUNS=10
 AUTO_PUSH=false
@@ -69,6 +73,7 @@ while [[ $# -gt 0 ]]; do
     --issue-url)    ISSUE_URL="$2"; shift 2 ;;
     --fork-repo)    FORK_REPO="$2"; shift 2 ;;
     --provider)     PROVIDER="$2"; shift 2 ;;
+    --task)         TASK="$2"; shift 2 ;;
     --config)       CONFIG_OVERRIDE="$2"; shift 2 ;;
     --repo)         REPO="$2"; shift 2 ;;
     --ref)          REF="$2"; shift 2 ;;
@@ -110,7 +115,7 @@ for cmd in gh jq; do
 done
 
 echo "╔══════════════════════════════════════════════════════════════╗"
-echo "║  Meta Loop — Production Ralph Loop CI Runner                ║"
+echo "║  Meta Ralph Loop — Production Engine CI Runner              ║"
 echo "╚══════════════════════════════════════════════════════════════╝"
 echo ""
 echo "  Repo:         $REPO"
@@ -118,6 +123,7 @@ echo "  Ref:          $REF"
 echo "  Issue URL:    $ISSUE_URL"
 echo "  Fork repo:    ${FORK_REPO:-none}"
 echo "  Provider:     $PROVIDER"
+echo "  Task:         ${TASK:-none}"
 echo "  Config:       ${CONFIG_OVERRIDE:-default}"
 echo "  Watch:        $WATCH"
 echo "  Continuous:   $CONTINUOUS"
@@ -427,43 +433,106 @@ run_agent_fix() {
   fi
 }
 
-commit_and_push() {
-  local RUN_ID="$1"
-  local SUMMARY="$2"
+has_local_changes() {
+  # Returns 0 if there are uncommitted changes (staged or unstaged), 1 otherwise
+  ! git -C "$PROJECT_DIR" diff --quiet 2>/dev/null || \
+  ! git -C "$PROJECT_DIR" diff --cached --quiet 2>/dev/null || \
+  [[ -n "$(git -C "$PROJECT_DIR" ls-files --others --exclude-standard 2>/dev/null)" ]]
+}
 
-  if ! git -C "$PROJECT_DIR" diff --quiet 2>/dev/null; then
-    local MSG="meta-loop: auto-fix after run $RUN_ID
+push_changes() {
+  local MSG="$1"
 
-$SUMMARY"
-
-    if [[ "$AUTO_PUSH" == true ]]; then
-      echo "  Auto-pushing changes..."
+  if [[ "$AUTO_PUSH" == true ]]; then
+    echo "  Auto-pushing changes..."
+    git -C "$PROJECT_DIR" add -A
+    git -C "$PROJECT_DIR" commit -m "$MSG"
+    git -C "$PROJECT_DIR" push origin "$REF"
+    echo "  Changes committed and pushed."
+    return 0
+  else
+    echo ""
+    echo "  Local changes detected:"
+    git -C "$PROJECT_DIR" diff --stat 2>/dev/null
+    git -C "$PROJECT_DIR" diff --cached --stat 2>/dev/null
+    echo ""
+    echo "  Review the changes above, then either:"
+    echo "    1) Press Enter to commit and push"
+    echo "    2) Type 'skip' to skip pushing (changes stay local)"
+    echo "    3) Ctrl+C to abort"
+    echo ""
+    local REPLY
+    read -r -p "  [Enter=push, skip=skip] " REPLY
+    if [[ "${REPLY,,}" == "skip" ]]; then
+      echo "  Skipping commit/push. Local changes preserved."
+      return 1
+    else
       git -C "$PROJECT_DIR" add -A
       git -C "$PROJECT_DIR" commit -m "$MSG"
       git -C "$PROJECT_DIR" push origin "$REF"
       echo "  Changes committed and pushed."
       return 0
-    else
-      echo ""
-      echo "  Changes are staged but NOT committed."
-      echo "  Review the diff above, then either:"
-      echo "    1) Press Enter to commit and push"
-      echo "    2) Type 'skip' to skip pushing (changes stay local)"
-      echo "    3) Ctrl+C to abort"
-      echo ""
-      local REPLY
-      read -r -p "  [Enter=push, skip=skip] " REPLY
-      if [[ "${REPLY,,}" == "skip" ]]; then
-        echo "  Skipping commit/push. Local changes preserved."
-        return 1
-      else
-        git -C "$PROJECT_DIR" add -A
-        git -C "$PROJECT_DIR" commit -m "$MSG"
-        git -C "$PROJECT_DIR" push origin "$REF"
-        echo "  Changes committed and pushed."
-        return 0
-      fi
     fi
+  fi
+}
+
+push_local_changes_if_any() {
+  if has_local_changes; then
+    echo ""
+    echo "▸ Local uncommitted changes detected — these must be pushed before the workflow runs."
+    echo ""
+    push_changes "meta-loop: push local changes before production run"
+  fi
+}
+
+run_task() {
+  local TASK_DESC="$1"
+
+  echo ""
+  echo "╔══════════════════════════════════════════════════════════════╗"
+  echo "║  Meta Ralph Loop — Implementing Task                        ║"
+  echo "╚══════════════════════════════════════════════════════════════╝"
+  echo ""
+  echo "  Task: $TASK_DESC"
+  echo ""
+
+  local AGENT_ARGS=(
+    --task "$TASK_DESC"
+    --project-dir "$PROJECT_DIR"
+    --provider "$PROVIDER"
+  )
+  if [[ "$DRY_RUN" == true ]]; then
+    AGENT_ARGS+=(--dry-run)
+  fi
+  AGENT_ARGS+=(--verbose)
+
+  python "$SCRIPT_DIR/meta_loop_agent.py" "${AGENT_ARGS[@]}"
+  local AGENT_EXIT=$?
+
+  if [[ "$AGENT_EXIT" -eq 0 ]]; then
+    echo ""
+    echo "  Task implementation applied. Changes:"
+    echo ""
+    git -C "$PROJECT_DIR" diff --stat 2>/dev/null || true
+    echo ""
+    return 0
+  elif [[ "$AGENT_EXIT" -eq 1 ]]; then
+    echo "  Agent produced no changes for this task."
+    return 1
+  else
+    echo "  Agent encountered an error implementing the task."
+    return 2
+  fi
+}
+
+commit_and_push() {
+  local RUN_ID="$1"
+  local SUMMARY="$2"
+
+  if has_local_changes; then
+    push_changes "meta-loop: auto-fix after run $RUN_ID
+
+$SUMMARY"
   else
     echo "  No uncommitted changes to push."
     return 1
@@ -476,6 +545,17 @@ $SUMMARY"
 
 run_once() {
   local RUN_ID CONCLUSION RUN_DIR
+
+  # If --task is set, implement it first before running the production job
+  if [[ -n "$TASK" ]]; then
+    if run_task "$TASK"; then
+      push_changes "meta-loop: implement task before production run
+
+Task: $TASK" || true
+    fi
+  else
+    push_local_changes_if_any
+  fi
 
   RUN_ID=$(trigger_workflow)
   RUN_ID=$(echo "$RUN_ID" | tail -1)
@@ -507,6 +587,18 @@ run_once() {
 if [[ "$CONTINUOUS" == true ]]; then
   echo "Running in continuous mode (max $MAX_RUNS runs)..."
   echo ""
+
+  # If --task is set, implement it first before starting the loop
+  if [[ -n "$TASK" ]]; then
+    if run_task "$TASK"; then
+      push_changes "meta-loop: implement task before production run
+
+Task: $TASK" || true
+    fi
+  else
+    push_local_changes_if_any
+  fi
+
   RUN_COUNT=0
   while [[ "$RUN_COUNT" -lt "$MAX_RUNS" ]]; do
     RUN_COUNT=$((RUN_COUNT + 1))

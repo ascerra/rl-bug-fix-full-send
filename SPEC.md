@@ -2,7 +2,7 @@
 
 ## 1. Overview
 
-**RL Bug Fix Full Send** is an agentic SDLC engine that uses iterative Ralph Loops to autonomously triage, implement, review, test, and report on bug fixes in GitHub-hosted repositories. The system runs exclusively in GitHub Actions, produces interactive visual evidence of every decision and action, and is designed to eventually drive the entire software development lifecycle for a GitHub organization.
+**RL Bug Fix Full Send** is an agentic SDLC engine — developed and maintained using iterative Ralph Loops — that autonomously triages, implements, reviews, tests, and reports on bug fixes in GitHub-hosted repositories. The production engine is a phased OODA pipeline (not itself a Ralph Loop), though it borrows the Ralph Loop philosophy: iteration beats perfection, and failures are data. The system runs exclusively in GitHub Actions, produces interactive visual evidence of every decision and action, and is designed to eventually drive the entire software development lifecycle for a GitHub organization.
 
 The MVP validates the engine against known-solved bugs: fork a repo, roll back the human fix, let the engine attempt the fix, then compare agent output against the human solution.
 
@@ -40,33 +40,37 @@ The Ralph Wiggum Loop has well-documented failure modes that our production loop
 | **Metric gaming** | Agent deletes tests instead of fixing code | Scope checks in review phase; minimal-diff validation; test count assertions |
 | **Cost blow-up** | Many iterations for simple tasks | Time and iteration budgets; cost tracking in observability layer |
 
-#### Our Adaptation: The Production Ralph Loop
+#### What the Ralph Loop Built: The Production Engine
 
-RL Bug Fix Full Send layers structure onto the raw Ralph pattern for production use in GitHub Actions. Our loop follows a phased execution model:
+The production engine is **not itself a Ralph Loop** — it is a phased OODA pipeline that the Ralph Loop methodology produced. Where the raw Ralph pattern is an unstructured iterate-until-done loop, the production engine adds significant architectural structure:
+
+**Phased pipeline**: Five specialized phases (triage → implement → review → validate → report) run sequentially, each with its own system prompt, tool restrictions, and trust boundaries. Most phases execute once and advance forward.
+
+**OODA decision cycle per phase**: Each phase runs its own observe → plan → act → validate → reflect cycle:
 
 ```
-OBSERVE → PLAN → ACT → VALIDATE → REFLECT → (repeat or escalate)
+OBSERVE → PLAN → ACT → VALIDATE → REFLECT → (advance, backtrack, or escalate)
 ```
 
-Each iteration:
-1. **Observe** — gather context (repo state, issue details, test results, CI output, prior iteration history)
-2. **Plan** — determine what to do next based on observations and goals
-3. **Act** — execute the plan (write code, run tests, call APIs, create PRs)
-4. **Validate** — check if the action achieved the goal (tests pass, review feedback addressed, CI green)
-5. **Reflect** — assess progress, decide whether to iterate, escalate to human, or declare done
+**Bounded backtracking**: The only true iterative loop is the implement↔review cycle. When review rejects a fix, implement re-runs with the review feedback injected as context. All other phases are single-shot.
 
-The loop has a configurable **iteration cap** (default: 10) and a **time budget** (default: 30 minutes). If the cap or budget is exceeded without completion, the loop escalates to a human with full context of what was attempted.
+**Zero trust**: Phases validate independently — the review phase re-reads the issue and diff from scratch rather than trusting the implementation phase's summary. This is an adversarial validation pattern, not iterative refinement.
 
-Where the raw Ralph pattern uses a single prompt and lets the agent decide everything, our production loop adds **specialized phases** (triage, implement, review, validate) with independent validation at each boundary. This prevents the metric-gaming and hallucination-amplification failures that plague unstructured loops, while preserving the core Ralph insight: **keep iterating with fresh context and concrete feedback until an objective success criterion is met**.
+**Hard limits**: A configurable **iteration cap** (default: 10) and **time budget** (default: 30 minutes) enforce escalation to a human when the engine gets stuck. A raw Ralph Loop would iterate indefinitely.
 
-### 1.2 Two Levels of Ralph Loop
+The engine preserves the core Ralph Loop insight — **failures are data, not dead ends** — but implements it through structured phase backtracking rather than unstructured retry. Failed implementation approaches are recorded and fed into the next attempt as context to avoid, and review rejection feedback is injected as specific guidance for the next implementation cycle.
 
-| Loop | Where it runs | Purpose |
-|------|--------------|---------|
-| **Meta Loop** | Local laptop (Cursor/Claude Code/OpenCode) | Builds and iterates on the production system itself |
-| **Production Loop** | GitHub Actions | Executes the actual agentic SDLC workflow against target repos |
+### 1.2 Development Methodology vs Production Engine
 
-This specification defines the **Production Loop**. The `prompt.md` file drives the **Meta Loop**.
+| | Ralph Loop (development methodology) | Production Engine (what it built) |
+|---|---|---|
+| **Where it runs** | Local laptop (Cursor/Claude Code/OpenCode) | GitHub Actions |
+| **What it is** | An unstructured iterate-until-done loop | A phased OODA pipeline with zero-trust validation |
+| **Purpose** | Builds and maintains the production engine itself | Executes the bug fix workflow against target repos |
+| **Loop structure** | Same prompt, evolving codebase, fresh context each run | 5 specialized phases with different prompts, tools, and trust boundaries |
+| **Iteration** | Every run is a full retry | Only implement↔review iterates; other phases are single-shot |
+
+This specification defines the **production engine**. The `prompt.md` file drives the **meta Ralph Loop** that builds and maintains it.
 
 ## 2. System Requirements
 
@@ -86,13 +90,17 @@ This specification defines the **Production Loop**. The `prompt.md` file drives 
 - **FR-1.11**: Escalate to human when judgment is required or iteration cap is reached
 - **FR-1.12**: Produce a comparison report when run against a known-solved bug
 
-#### FR-2: Visual Evidence and Reporting
-- **FR-2.1**: Generate an interactive HTML decision tree for every loop execution
-- **FR-2.2**: Generate an interactive action map showing the sequence of actions taken
-- **FR-2.3**: Every node in the visualization must be clickable to view underlying logs, diffs, or LLM transcripts
-- **FR-2.4**: The system generates its own demo artifacts — no manual demo creation needed
-- **FR-2.5**: Visual reports are published as GitHub Actions artifacts and optionally as GitHub Pages
-- **FR-2.6**: Comparison view: side-by-side diff of agent fix vs human fix with annotations
+#### FR-2: Visual Evidence and Reporting (3D Interactive)
+- **FR-2.1**: Generate an interactive 3D visualization of the entire execution for every loop run, rendered in the browser using Three.js
+- **FR-2.2**: The primary view is a 3D decision landscape showing the agent's journey: phase transitions, branching decisions, iterations, and outcomes rendered as a navigable 3D scene with camera controls (orbit, zoom, pan)
+- **FR-2.3**: Every 3D object in the scene is clickable — clicking drills down into a detail panel showing human-readable information: what the AI was told to do, what it did, what it decided, what tools it used, and what happened as a result. No raw JSON, YAML, or code dumps — all content is formatted as plain-English narrative with syntax-highlighted code snippets where relevant
+- **FR-2.4**: The 3D scene uses visual metaphors for the pipeline: phases as distinct platform layers, actions as objects on those platforms, data flow as animated particle connections between objects, and status encoded via color and lighting (green glow = success, amber = iteration, red = failure, blue = human escalation)
+- **FR-2.5**: The system generates its own demo artifacts — no manual demo creation needed
+- **FR-2.6**: Visual reports are published as GitHub Actions artifacts and optionally as GitHub Pages
+- **FR-2.7**: Comparison view: side-by-side diff of agent fix vs human fix with annotations
+- **FR-2.8**: The detail drill-down panels present LLM interactions as a readable conversation (what the agent was asked, what it answered, what it did next) — not raw API payloads
+- **FR-2.9**: Report is a single self-contained HTML file with embedded Three.js, CSS, and data (no external dependencies, works offline)
+- **FR-2.10**: The 3D scene includes a timeline scrubber that animates the execution chronologically — the viewer can watch the agent work step by step
 
 #### FR-3: Observability
 - **FR-3.1**: Structured JSON logging for every action with correlation IDs
@@ -118,6 +126,16 @@ This specification defines the **Production Loop**. The `prompt.md` file drives 
 - **FR-5.3**: The engine can trigger and monitor its own sub-workflows
 - **FR-5.4**: Workflow artifacts are the primary storage for all outputs (logs, reports, traces)
 - **FR-5.5**: Secrets management via GitHub Actions secrets and OIDC where possible
+
+#### FR-6: Implement-First Workflow Execution
+- **FR-6.1**: The engine completes all implementation and review iterations locally before pushing any changes or triggering CI workflows — no partial pushes
+- **FR-6.2**: Only after the engine's internal validation passes (review approved, linters pass, local checks green) does it push the branch and create the PR
+- **FR-6.3**: After PR creation, the engine monitors the target repo's CI workflow to completion — downloads test results, build logs, and status check outcomes
+- **FR-6.4**: If CI fails, the engine pulls the failure details back into its context and enters a CI remediation loop: analyze failure → implement fix → re-review → push → re-monitor CI
+- **FR-6.5**: The CI remediation loop has its own iteration cap (configurable, default: 3) and time budget, independent of the main implementation loop
+- **FR-6.6**: CI failure analysis is structured: the engine categorizes failures (test failure, build error, lint violation, timeout, infrastructure flake) and applies different strategies for each
+- **FR-6.7**: Infrastructure flakes (network timeouts, runner failures, service unavailability) trigger a CI re-run rather than a code change
+- **FR-6.8**: If CI remediation exceeds its cap, the engine escalates to human with the full failure context attached to the PR as a comment
 
 ### 2.2 Non-Functional Requirements
 
@@ -148,47 +166,85 @@ This specification defines the **Production Loop**. The `prompt.md` file drives 
 - **NFR-4.2**: Visual report generation completes within 2 minutes
 - **NFR-4.3**: Total GitHub Actions cost per bug fix attempt < $5 (target)
 
+#### NFR-5: Neutral Observer and Agent Provenance
+- **NFR-5.1**: A neutral observer process runs independently of the agent pipeline, in a separate GitHub Actions job with its own secret scope — the agent cannot access the observer's signing credentials
+- **NFR-5.2**: The observer reconstructs the agent's execution timeline from artifacts (`execution.json`, `log.json`, transcripts) and cross-checks claims against evidence (diff consistency, action completeness, phase ordering, token plausibility, tool call integrity)
+- **NFR-5.3**: The observer produces a signed agent provenance attestation in in-toto Statement v1 format, aligned with SLSA Build provenance structure, capturing: subject (commit SHA), model identity, system prompt digests, tool definitions, invocation parameters, materials, tool call summary, and cross-check results
+- **NFR-5.4**: Attestation signing uses Sigstore keyless signing via GitHub Actions OIDC — the signing identity is bound to the observer job, not the agent job
+- **NFR-5.5**: A configurable policy gate evaluates the signed attestation against rules (model allowlist, prompt template integrity, scope compliance, cross-check pass/fail) before the result is posted as a PR comment or used as a required status check
+- **NFR-5.6**: The observer is post-hoc for MVP (runs after the agent finishes). Runtime interception (transparent proxy, syscall tracing) and network activity capture are future enhancements
+- **NFR-5.7**: Attestation storage is via GitHub Actions artifacts for MVP. OCI registry attachment and `refs/attestations/` git namespace are future work
+
 ## 3. Architecture Overview
 
 ### 3.1 Component Diagram
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    GitHub Actions                         │
-│  ┌───────────────────────────────────────────────────┐   │
-│  │              Ralph Loop Engine                     │   │
-│  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌────────┐ │   │
-│  │  │ Triage  │→│Implement│→│ Review  │→│Validate│ │   │
-│  │  │ Phase   │ │ Phase   │ │ Phase   │ │ Phase  │ │   │
-│  │  └─────────┘ └─────────┘ └─────────┘ └────────┘ │   │
-│  │       ↑                                    │      │   │
-│  │       └────────── REFLECT & ITERATE ───────┘      │   │
-│  │                                                    │   │
-│  │  ┌────────────────────────────────────────────┐   │   │
-│  │  │           Observability Layer               │   │   │
-│  │  │  Logger │ Tracer │ Metrics │ Transcripts   │   │   │
-│  │  └────────────────────────────────────────────┘   │   │
-│  │                                                    │   │
-│  │  ┌────────────────────────────────────────────┐   │   │
-│  │  │           Integration Layer                 │   │   │
-│  │  │  GitHub │ Slack │ Jira │ LLM │ Discovery   │   │   │
-│  │  └────────────────────────────────────────────┘   │   │
-│  └───────────────────────────────────────────────────┘   │
-│                                                           │
-│  ┌───────────────────────────────────────────────────┐   │
-│  │          Visualization Generator                   │   │
-│  │  Decision Tree │ Action Map │ Comparison Report   │   │
-│  └───────────────────────────────────────────────────┘   │
-│                         │                                 │
-│                    ┌────▼────┐                            │
-│                    │Artifacts│                            │
-│                    └─────────┘                            │
-└─────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                         GitHub Actions                            │
+│                                                                   │
+│  ┌─── Job 1: agent ──────────────────────────────────────────┐   │
+│  │  Secrets: GEMINI_API_KEY, GH_PAT, ANTHROPIC_API_KEY       │   │
+│  │                                                            │   │
+│  │  ┌──────────────── Ralph Loop Engine ──────────────────┐  │   │
+│  │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────────┐ │  │   │
+│  │  │  │ Triage  │→│Implement│→│ Review  │→│ Validate │ │  │   │
+│  │  │  └─────────┘ └─────────┘ └─────────┘ └──────────┘ │  │   │
+│  │  │       ↑                                    │       │  │   │
+│  │  │       └────────── REFLECT & ITERATE ───────┘       │  │   │
+│  │  │                                                     │  │   │
+│  │  │  ┌─────────────────────────────────────────────┐   │  │   │
+│  │  │  │          Observability Layer                 │   │  │   │
+│  │  │  │  Logger │ Tracer │ Metrics │ Transcripts    │   │  │   │
+│  │  │  └─────────────────────────────────────────────┘   │  │   │
+│  │  │                                                     │  │   │
+│  │  │  ┌─────────────────────────────────────────────┐   │  │   │
+│  │  │  │          Integration Layer                   │   │  │   │
+│  │  │  │  GitHub │ Slack │ Jira │ LLM │ Discovery    │   │  │   │
+│  │  │  └─────────────────────────────────────────────┘   │  │   │
+│  │  └─────────────────────────────────────────────────────┘  │   │
+│  │                                                            │   │
+│  │  ┌────────────────────────────────────────────────────┐   │   │
+│  │  │         Visualization Generator                     │   │   │
+│  │  │  Decision Tree │ Action Map │ Comparison Report    │   │   │
+│  │  └────────────────────────────────────────────────────┘   │   │
+│  │                          │                                │   │
+│  │                     ┌────▼────┐                           │   │
+│  │                     │Artifacts│ ──── upload ────┐         │   │
+│  │                     └─────────┘                 │         │   │
+│  └─────────────────────────────────────────────────│─────────┘   │
+│                                                    │              │
+│  ┌─── Job 2: observer (needs: agent) ──────────────│─────────┐   │
+│  │  Secrets: (none — uses OIDC for Sigstore)       │         │   │
+│  │  Permissions: id-token: write, contents: read   │         │   │
+│  │                                            ┌────▼────┐    │   │
+│  │                                            │Download │    │   │
+│  │                                            │Artifacts│    │   │
+│  │                                            └────┬────┘    │   │
+│  │  ┌──────────────── Neutral Observer ───────────┐│         │   │
+│  │  │                                             ││         │   │
+│  │  │  ┌──────────────┐  ┌─────────────────────┐ ││         │   │
+│  │  │  │ Reconstruct  │→ │ Cross-Check Claims  │◄┘│         │   │
+│  │  │  │ Timeline     │  │ vs Evidence          │  │         │   │
+│  │  │  └──────────────┘  └──────────┬──────────┘  │         │   │
+│  │  │                               │              │         │   │
+│  │  │  ┌──────────────┐  ┌─────────▼──────────┐  │         │   │
+│  │  │  │ Evaluate     │← │ Build & Sign       │  │         │   │
+│  │  │  │ Policy       │  │ Attestation (OIDC) │  │         │   │
+│  │  │  └──────┬───────┘  └────────────────────┘  │         │   │
+│  │  └─────────│───────────────────────────────────┘         │   │
+│  │            │                                              │   │
+│  │       ┌────▼─────────────────┐                           │   │
+│  │       │ Signed Attestation + │ ──── upload ───→ Artifacts│   │
+│  │       │ Policy Result        │                           │   │
+│  │       └──────────────────────┘                           │   │
+│  └───────────────────────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 The Loop as the Agent
+### 3.2 The Pipeline as the Agent
 
-Rather than deploying N separate agent services that coordinate via side-channels, the Ralph Loop IS the agent. A single loop execution encompasses all phases (triage, implement, review, test, report) using specialized prompts and tools at each phase. This design choice:
+Rather than deploying N separate agent services that coordinate via side-channels, a single pipeline execution IS the agent. One execution encompasses all phases (triage, implement, review, validate, report) using specialized prompts and tools at each phase. This design choice:
 
 - **Eliminates inter-agent trust problems** — there is one execution context, not multiple services trusting each other
 - **Preserves zero-trust validation** — each phase independently validates (the review phase does not trust the implementation phase's self-assessment)
@@ -288,6 +344,65 @@ action:
     confidence: 0.9
 ```
 
+### 4.3 Agent Provenance Attestation
+
+The neutral observer produces a signed attestation for every agent execution. The format follows the in-toto Statement v1 specification with a custom predicate type aligned to SLSA Build provenance structure:
+
+```yaml
+attestation:
+  _type: "https://in-toto.io/Statement/v1"
+  subject:
+    - name: "git+https://github.com/org/repo"
+      digest:
+        sha1: "<commit-sha-produced-by-agent>"
+  predicateType: "https://rl-engine.dev/provenance/agent/v1"
+  predicate:
+    buildDefinition:
+      buildType: "https://rl-engine.dev/AgentSynthesis/v1"
+      externalParameters:
+        issue_url: "https://github.com/org/repo/issues/123"
+        config_overrides: { ... }
+      internalParameters:
+        engine_version: "0.8.0"
+        workflow_run_id: "23618411249"
+        runner_os: "ubuntu-22.04"
+      resolvedDependencies:
+        - uri: "git+https://github.com/org/repo@<base-commit>"
+          digest: { sha1: "<base-commit>" }
+        - uri: "prompt://templates/prompts/triage.md"
+          digest: { sha256: "<hash>" }
+        - uri: "prompt://templates/prompts/implement.md"
+          digest: { sha256: "<hash>" }
+        - uri: "prompt://templates/prompts/review.md"
+          digest: { sha256: "<hash>" }
+        - uri: "prompt://templates/prompts/validate.md"
+          digest: { sha256: "<hash>" }
+    runDetails:
+      builder:
+        id: "https://github.com/org/rl-bug-fix-full-send/.github/workflows/ralph-loop.yml"
+      metadata:
+        invocationId: "<workflow-run-url>"
+        startedOn: "2026-03-28T10:00:00Z"
+        finishedOn: "2026-03-28T10:25:00Z"
+      models:
+        - id: "gemini-2.5-pro"
+          provider: "google"
+          api_version: "v1"
+          temperature: 0.2
+          total_calls: 7
+          total_tokens_in: 45000
+          total_tokens_out: 12000
+      toolDefinitions:
+        digest: { sha256: "<hash-of-tool-config>" }
+        tools: ["file_read", "file_write", "shell_run", "git_diff", "github_api"]
+      crossCheckResults:
+        diff_consistency: { passed: true }
+        action_completeness: { passed: true }
+        phase_ordering: { passed: true }
+        token_plausibility: { passed: true }
+        tool_call_integrity: { passed: true }
+```
+
 ## 5. Phase Specifications
 
 ### 5.1 Triage Phase
@@ -384,36 +499,140 @@ action:
 
 **Outputs**: Interactive HTML report, comparison report (if applicable), artifact bundle
 
-## 6. Visualization Specification
+### 5.6 Observer Phase (Neutral Observer — Separate Job)
 
-### 6.1 Decision Tree
+**Goal**: Independently verify the agent's execution and produce a signed provenance attestation that the agent cannot forge.
 
-An interactive SVG/HTML tree where:
-- Each **node** represents a decision point (phase entry, branching logic, escalation check)
-- Each **edge** represents the path taken with confidence scores
-- **Color coding**: green (success), yellow (iteration needed), red (failure/escalation), blue (human intervention)
-- **Click** any node to expand: shows the LLM prompt, response, reasoning, and resulting action
-- **Zoom** in/out for large trees
-- **Timeline** scrubber to step through the execution chronologically
+**Execution context**: Runs in a separate GitHub Actions job (`observer`) that depends on the agent job. The observer job has its own secret scope (OIDC identity for Sigstore signing) and cannot access the agent's secrets. The agent cannot access the observer's signing credentials.
 
-### 6.2 Action Map
+**Inputs**: Agent artifacts downloaded from the prior job (`execution.json`, `log.json`, `transcripts/`, `progress.md`, git branch with agent commits)
 
-A 2.5D isometric or layered visualization showing:
-- **Layers** represent phases (triage, implement, review, validate)
-- **Objects** on each layer represent actions taken (file reads, edits, test runs, API calls)
-- **Connections** between objects show data flow (which file read informed which edit)
-- **Color/size** encode significance (larger = more tokens, brighter = higher confidence)
-- **Click** any object to see the full action record (logs, diffs, LLM transcript)
-- **Hover** for summary tooltip
+**Actions**:
+1. **Reconstruct execution timeline** — parse the agent's artifacts to build an independent timeline of LLM calls, file operations, shell commands, and phase transitions
+2. **Cross-check claims vs evidence**:
+   - Diff consistency: verify the git diff on the branch matches the `file_changes` recorded in `execution.json`
+   - Action completeness: every file modified in the diff has a corresponding action record
+   - Test execution: if tests were claimed to pass, verify test output artifact exists and is consistent
+   - Phase ordering: phases executed in declared order, no skipped validation
+   - Token plausibility: LLM token counts in the execution record are plausible (not fabricated)
+   - Tool call integrity: every tool call in transcripts has a corresponding action record
+3. **Build agent provenance attestation** — produce an in-toto Statement v1 attestation with predicate type `https://rl-engine.dev/provenance/agent/v1`, capturing: subject (commit SHA), builder identity, model identity, system prompt digests, tool definitions, invocation parameters, materials, tool call summary, and cross-check results
+4. **Sign the attestation** — use Sigstore keyless signing via GitHub Actions OIDC (the signing identity is bound to the observer job)
+5. **Evaluate policy** — apply configurable rules against the attestation: model allowlist, prompt template integrity (digest comparison), scope compliance (only modified files related to the issue), cross-check pass/fail, iteration limit compliance
+6. **Publish results** — upload signed attestation and policy result as workflow artifacts; optionally post policy summary as a PR comment
 
-### 6.3 Comparison Report
+**Outputs**: Signed agent provenance attestation (JSON), policy evaluation result (pass/fail with details), optional PR comment
+
+**Validation**: Attestation conforms to in-toto Statement v1 schema; signature is verifiable via Sigstore transparency log; policy evaluation produces a definitive pass/fail
+
+**Trust model**: The observer does not trust the agent's self-reported data. It reconstructs what happened from artifacts and verifies consistency. The attestation is signed with a credential the agent never had access to. A compromised agent cannot forge a valid attestation because it cannot obtain the observer's OIDC-issued signing certificate.
+
+### 5.7 CI Remediation Phase (Implement-First Workflow Execution)
+
+**Goal**: After the engine completes all internal implementation and review cycles, push the changes, trigger the target repo's CI, monitor results, and remediate any CI failures.
+
+**Precondition**: The engine does NOT push changes or create a PR until implementation is internally approved. All implement-review iterations happen locally first. Only a fully reviewed and locally validated change gets pushed.
+
+**Inputs**: Approved code changes (locally validated), PR creation details, CI workflow configuration
+
+**Actions**:
+1. Push the branch and create the PR (this triggers the target repo's CI pipeline)
+2. Poll CI status via GitHub API (`check_ci_status`) until all required checks complete or timeout
+3. Download CI results: test output, build logs, lint results, status check details
+4. If CI passes → proceed to report phase, execution is successful
+5. If CI fails → categorize the failure:
+   - **Test failure**: extract failing test names and error messages, feed into implementation phase for targeted fix
+   - **Build error**: extract compiler/build errors, feed into implementation phase
+   - **Lint violation**: extract lint errors, feed into implementation phase
+   - **Infrastructure flake** (network timeout, runner failure, service unavailability): trigger a CI re-run via GitHub API, do not modify code
+   - **Timeout**: check if tests are known to be slow, escalate if repeated
+6. For code failures: re-enter implement → review → validate → push cycle with CI failure context injected
+7. After pushing the fix, return to step 2 (monitor CI again)
+
+**Iteration limits**:
+- CI remediation loop has its own iteration cap (default: 3, configurable via `ci_remediation.max_iterations`)
+- CI remediation has its own time budget (default: 15 minutes, configurable via `ci_remediation.time_budget_minutes`)
+- These are independent of the main implementation loop limits
+
+**Outputs**: Green CI on the PR (or escalation with full failure context)
+
+**Validation**: All required CI status checks pass, or failure is escalated with actionable context
+
+## 6. Visualization Specification (3D Interactive Report)
+
+The report is a single self-contained HTML file with embedded Three.js, CSS, and execution data. No external dependencies — it works offline, from a local file or as a GitHub Pages deployment. The visualization prioritizes human understanding over data completeness: every piece of information is presented as readable narrative, not raw machine formats.
+
+### 6.1 3D Execution Landscape (Primary View)
+
+The main visualization is a Three.js 3D scene showing the agent's entire execution as a navigable landscape:
+
+**Scene structure**:
+- **Platform layers** — each pipeline phase (triage, implement, review, validate, report) is a distinct floating platform at a different elevation, arranged in execution order. Platforms are connected by glowing bridge paths showing phase transitions.
+- **Action objects** — each action the agent took (LLM call, file read, file write, test run, API call, git operation) is rendered as a distinct 3D object on its phase's platform. Object shape encodes type: polyhedra for LLM calls, cubes for file operations, cylinders for test/command runs, spheres for API calls.
+- **Data flow connections** — animated particle streams between objects show data flow: which file read informed which LLM call, which LLM response produced which file write. Particle color indicates data type (code = cyan, reasoning = gold, test results = green/red).
+- **Status encoding** — objects glow with status colors: green (success), amber (iteration/retry), red (failure/error), blue (escalation to human). Failed paths pulse. The overall scene lighting shifts warm (success) to cool (problems) based on execution outcome.
+- **Decision branch points** — where the pipeline branched (implement-review loop, escalation checks), the path visually forks with the taken path illuminated and the not-taken path dimmed.
+
+**Camera and navigation**:
+- Orbit controls (click-drag to rotate, scroll to zoom, right-drag to pan)
+- Preset camera positions: overview (sees entire landscape), per-phase close-up, follow-the-path animation
+- Minimap in corner showing top-down view with current camera position
+
+**Timeline scrubber**:
+- A timeline bar at the bottom of the viewport shows wall-clock time of the execution
+- Dragging the scrubber animates the scene: objects appear as they happened, connections light up in sequence, the camera follows the action
+- Play/pause button for automatic playback at configurable speed
+- Phase markers on the timeline for quick jumping
+
+### 6.2 Detail Drill-Down (Click-to-Inspect)
+
+Clicking any 3D object opens a slide-in detail panel (overlaid on the 3D scene, not replacing it). The panel presents **human-readable narrative**, not raw data:
+
+**For LLM calls**:
+- "What the agent was told" — the system prompt and context summarized in plain English (e.g., "The agent was asked to review the diff for correctness, check if the fix addresses the nil pointer described in issue #123, and verify no security issues were introduced")
+- "What it decided" — the LLM's response summarized as a narrative (e.g., "The agent identified that the fix correctly adds a nil check on line 42 of reconciler.go but noted the error message could be more descriptive. Verdict: approve with one suggestion.")
+- "Key reasoning" — extracted reasoning/chain-of-thought in the agent's own words, formatted as readable paragraphs
+- "By the numbers" — tokens used, model name, response time (small footer, not the focus)
+
+**For file operations**:
+- "What was read/written" — file path, with a syntax-highlighted snippet of the relevant code (not the entire file)
+- "Why" — the reasoning that led to this operation, traced back to the LLM call that requested it
+- "What changed" — for writes, a clean diff view with before/after
+
+**For test and command runs**:
+- "What was run" — the command, in plain text
+- "What happened" — pass/fail with the relevant output excerpt (not the full 500-line test log — just the failures or the summary line)
+- "What the agent did about it" — if tests failed, what the agent decided to do next
+
+**For phase transitions**:
+- "Why did the agent move to the next phase?" — the reflect step's conclusion in plain English
+- "What was carried forward?" — key context that flowed to the next phase
+
+### 6.3 Narrative Summary (Landing View)
+
+Before the user enters the 3D scene, the report opens with a narrative summary page:
+- **One-paragraph story**: "The agent received issue #123 (nil pointer in reconciler). It identified the bug in `pkg/controller/reconciler.go`, implemented a nil check, passed self-review on the second attempt after fixing an error message, and opened PR #456. Total time: 8 minutes across 4 phases."
+- **Key metrics cards**: total time, iterations, LLM calls, files modified, tests run, final status
+- **Phase timeline**: horizontal bar chart showing time spent in each phase
+- "Enter 3D View" button that transitions into the full scene
+
+### 6.4 Comparison Report
 
 When running against a known-solved bug:
-- **Side-by-side diff**: agent fix vs human fix
+- **Side-by-side diff**: agent fix vs human fix, syntax-highlighted
 - **Structural comparison**: same files changed? same approach?
 - **Test comparison**: did both fixes make the same tests pass?
 - **Annotation**: AI-generated analysis of similarities and differences
 - **Metrics**: lines changed, files touched, complexity delta
+- **3D overlay**: in the 3D scene, human-fix objects appear as ghost outlines alongside agent objects for visual comparison
+
+### 6.5 Design Principles for the Report
+
+1. **No raw JSON, YAML, or API payloads** — every piece of data is transformed into human-readable narrative before display. The execution.json is the data source but is never shown to the user.
+2. **Progressive disclosure** — the landing page tells the story in one paragraph. The 3D scene shows the structure. Clicking objects reveals the details. The user controls how deep they go.
+3. **Accurate, not decorative** — every visual element maps to real execution data. Object positions, sizes, colors, and connections are all data-driven. The 3D scene is a faithful representation of what happened, not a generic animation.
+4. **Works offline** — single HTML file, no CDN dependencies. Three.js is bundled inline (minified). Execution data is embedded as a JavaScript object.
+5. **Performant** — executions with up to 200 actions should render smoothly at 60fps on a standard laptop. Level-of-detail rendering for larger executions.
 
 ## 7. Golden Principles
 
@@ -429,6 +648,7 @@ These are enforced mechanically (via linters, tests, and the loop itself):
 8. **Provenance is automatic** — model name, version, and prompt hash are recorded for every LLM call.
 9. **Demos are a byproduct** — the system generates its own visual evidence as part of normal operation, not as a separate effort.
 10. **Configuration is declarative** — loop behavior is configured via YAML, not hardcoded.
+11. **Attestation is independent** — a neutral observer, running in an isolated execution context with its own signing credentials, independently verifies and attests the agent's execution. The agent cannot forge its own attestation.
 
 ## 8. Configuration Schema
 
@@ -473,12 +693,31 @@ phases:
     ci_equivalent: true
     minimal_diff_check: true
 
+ci_remediation:
+  enabled: true
+  max_iterations: 3
+  time_budget_minutes: 15
+  ci_poll_interval_seconds: 30
+  ci_poll_timeout_minutes: 20
+  rerun_on_infrastructure_flake: true
+  max_flake_reruns: 2
+  failure_categories:
+    test_failure: "remediate"      # re-enter implement loop with failure context
+    build_error: "remediate"       # re-enter implement loop with failure context
+    lint_violation: "remediate"    # re-enter implement loop with failure context
+    infrastructure_flake: "rerun"  # trigger CI re-run, do not modify code
+    timeout: "escalate"            # escalate to human
+
 reporting:
+  visualization_engine: "threejs"  # threejs (3D) | d3 (legacy 2D, for compatibility)
   decision_tree: true
   action_map: true
+  narrative_summary: true
+  timeline_scrubber: true
   comparison_mode: false  # set true for known-solved bugs
   publish_to_pages: false
   artifact_retention_days: 30
+  detail_format: "narrative"  # narrative (human-readable) | raw (JSON, for debugging only)
 
 integrations:
   github:
@@ -495,6 +734,23 @@ security:
   signing_method: "gitsign"  # gpg | gitsign
   provenance_recording: true
   untrusted_content_delimiter: "--- UNTRUSTED CONTENT BELOW ---"
+
+observer:
+  enabled: true
+  signing_method: "sigstore"  # sigstore | cosign-key | none (for local testing)
+  policy_file: "templates/policies/default.yaml"
+  cross_checks:
+    diff_consistency: true
+    action_completeness: true
+    phase_ordering: true
+    token_plausibility: true
+    tool_call_integrity: true
+  model_allowlist:
+    - "gemini-2.5-pro"
+    - "claude-sonnet-4-20250514"
+  prompt_template_digests: {}  # populated at build/release time with known-good SHA-256 digests
+  post_policy_result_to_pr: true
+  fail_on_policy_violation: false  # when true, a policy failure marks the workflow as failed
 ```
 
 ## 9. API and Interface Contracts

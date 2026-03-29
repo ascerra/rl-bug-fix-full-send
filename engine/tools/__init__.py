@@ -1,1 +1,1 @@
-"""Tool executor for Ralph Loop phases — sandboxed file, shell, git, and API operations."""
+"""Tool executor for pipeline phases — sandboxed file, shell, git, and API operations."""

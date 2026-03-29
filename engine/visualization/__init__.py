@@ -19,6 +19,15 @@ from engine.visualization.comparison import (
     parse_unified_diff,
 )
 from engine.visualization.decision_tree import TreeNode, build_decision_tree, node_count
+from engine.visualization.narrative import (
+    LandingData,
+    MetricCard,
+    NarrativeFormatter,
+    NarrativeSummaryBuilder,
+    PhaseBar,
+    build_landing,
+    enrich_scene_with_narratives,
+)
 from engine.visualization.publisher import (
     PublishResult,
     ReportPublisher,
@@ -26,6 +35,18 @@ from engine.visualization.publisher import (
     build_summary_markdown,
 )
 from engine.visualization.report_generator import ReportData, ReportGenerator, extract_report_data
+from engine.visualization.scene import (
+    SceneBuilder,
+    SceneConnection,
+    SceneData,
+    SceneObject,
+    ScenePlatform,
+    TimelineData,
+    TimelineEvent,
+    TimelineMarker,
+    build_scene,
+    build_timeline,
+)
 
 __all__ = [
     "ActionMapData",
@@ -36,18 +57,35 @@ __all__ = [
     "ComparisonMetrics",
     "DiffSummary",
     "FileDiff",
+    "LandingData",
+    "MetricCard",
+    "NarrativeFormatter",
+    "NarrativeSummaryBuilder",
+    "PhaseBar",
     "PublishResult",
     "ReportData",
     "ReportGenerator",
     "ReportPublisher",
+    "SceneBuilder",
+    "SceneConnection",
+    "SceneData",
+    "SceneObject",
+    "ScenePlatform",
+    "TimelineData",
+    "TimelineEvent",
+    "TimelineMarker",
     "TreeNode",
     "build_action_map",
     "build_artifact_manifest",
     "build_comparison",
     "build_decision_tree",
+    "build_landing",
+    "build_scene",
     "build_summary_markdown",
+    "build_timeline",
     "compute_file_overlap",
     "compute_metrics",
+    "enrich_scene_with_narratives",
     "extract_report_data",
     "node_count",
     "parse_unified_diff",

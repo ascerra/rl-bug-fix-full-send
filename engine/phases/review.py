@@ -188,9 +188,7 @@ class ReviewPhase(Phase):
                 f"Deterministic path-consistency check found {len(consistency_findings)} issue(s)"
             )
             for cf in consistency_findings:
-                self.logger.narrate(
-                    f"  Path consistency: {cf['description']}"
-                )
+                self.logger.narrate(f"  Path consistency: {cf['description']}")
             existing = review.get("findings", [])
             review = dict(review, findings=existing + consistency_findings)
             if review.get("verdict") == "approve" and any(
@@ -543,13 +541,12 @@ def _check_path_consistency(diff: str) -> list[dict[str, Any]]:
     if not added_lines:
         return []
 
-    added_text = "\n".join(added_lines)
-
     path_by_operation: dict[str, list[str]] = {
         "create": [],
         "cleanup": [],
         "reference": [],
     }
+    oci_uri_create_bases: set[str] = set()
 
     for line in added_lines:
         stripped = line.strip()
@@ -562,38 +559,40 @@ def _check_path_consistency(diff: str) -> list[dict[str, Any]]:
                 path_by_operation["cleanup"].append(path)
             elif "skopeo copy" in stripped or "mkdir" in stripped:
                 path_by_operation["create"].append(path)
+                if path in oci_paths:
+                    oci_uri_create_bases.add(_strip_oci_tag(path))
             else:
                 path_by_operation["reference"].append(path)
 
     findings: list[dict[str, Any]] = []
 
-    create_bases = _extract_path_bases(path_by_operation["create"])
-    cleanup_bases = _extract_path_bases(path_by_operation["cleanup"])
-
     for create_path in path_by_operation["create"]:
         base = _strip_oci_tag(create_path)
-        matched = False
         for cleanup_path in path_by_operation["cleanup"]:
             cleanup_base = _strip_oci_tag(cleanup_path)
             if base == cleanup_base:
-                matched = True
                 if _has_oci_tag(create_path) != _has_oci_tag(cleanup_path):
-                    findings.append({
-                        "dimension": "correctness",
-                        "severity": "suggestion",
-                        "file": "",
-                        "line": 0,
-                        "description": (
-                            f"OCI tag mismatch: creation uses '{create_path}' but cleanup uses "
-                            f"'{cleanup_path}'. The ':latest' (or similar tag) is present in one "
-                            f"but not the other. Verify this is intentional — mismatched paths "
-                            f"cause cleanup to silently fail."
-                        ),
-                        "suggestion": (
-                            "Ensure the cleanup path exactly matches the creation path, "
-                            "including any OCI tag suffixes like ':latest'."
-                        ),
-                    })
+                    if base in oci_uri_create_bases:
+                        break
+                    findings.append(
+                        {
+                            "dimension": "correctness",
+                            "severity": "suggestion",
+                            "file": "",
+                            "line": 0,
+                            "description": (
+                                f"OCI tag mismatch: creation uses '{create_path}' "
+                                f"but cleanup uses '{cleanup_path}'. The ':latest' "
+                                f"(or similar tag) is present in one but not the "
+                                f"other. Verify this is intentional — mismatched "
+                                f"paths cause cleanup to silently fail."
+                            ),
+                            "suggestion": (
+                                "Ensure the cleanup path exactly matches the creation path, "
+                                "including any OCI tag suffixes like ':latest'."
+                            ),
+                        }
+                    )
                 break
 
     func_sigs: dict[str, int] = {}
@@ -604,7 +603,7 @@ def _check_path_consistency(diff: str) -> list[dict[str, Any]]:
             func_name = m.group(1)
             local_count = 0
             for subsequent in added_lines:
-                if f'local ' in subsequent and func_name not in subsequent:
+                if "local " in subsequent and func_name not in subsequent:
                     local_count += 1
             func_sigs[func_name] = local_count
 

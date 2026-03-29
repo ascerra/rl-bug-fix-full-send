@@ -1,4 +1,4 @@
-"""Prompt template loading for Ralph Loop phases.
+"""Prompt template loading for pipeline phases.
 
 Loads markdown prompt templates from templates/prompts/ and renders them
 with Jinja2 for variable substitution. Templates are cached after first load.
