@@ -149,7 +149,7 @@ class ImplementPhase(Phase):
 
         file_context_parts: list[str] = []
         for path, content in observation.get("file_contents", {}).items():
-            truncated = content[:50000] if len(content) > 50000 else content
+            truncated = content[:200000] if len(content) > 200000 else content
             file_context_parts.append(f"--- {path} ---\n{truncated}")
         file_context = "\n\n".join(file_context_parts) if file_context_parts else "N/A"
 
