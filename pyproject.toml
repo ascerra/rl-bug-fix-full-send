@@ -1,7 +1,7 @@
 [project]
 name = "rl-engine"
 version = "0.1.0"
-description = "Ralph Loop Bug Fix Engine — agentic SDLC for GitHub organizations"
+description = "RL Bug Fix Engine — agentic SDLC for GitHub organizations"
 requires-python = ">=3.12"
 dependencies = [
     "google-genai",

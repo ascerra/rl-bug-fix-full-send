@@ -22,7 +22,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from engine.loop import RalphLoop
+from engine.loop import PipelineEngine
 from engine.workflow.ci_monitor import (
     CheckRunResult,
     CIFailureCategory,
@@ -254,7 +254,7 @@ class TestSuccessComment:
     def test_footer_present(self):
         h = _make_history(outcome="success", elapsed_seconds=90.0)
         comment = build_ci_pr_comment(h)
-        assert "Ralph Loop Engine" in comment
+        assert "RL Bug Fix Engine" in comment
         assert "1.5m" in comment
 
 
@@ -359,34 +359,37 @@ class TestGenericComment:
 
 class TestExtractPRNumber:
     def test_valid_url(self):
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
 
-        assert RalphLoop._extract_pr_number_from_url("https://github.com/org/repo/pull/42") == 42
+        url = "https://github.com/org/repo/pull/42"
+        assert PipelineEngine._extract_pr_number_from_url(url) == 42
 
     def test_url_with_trailing(self):
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
 
-        assert (
-            RalphLoop._extract_pr_number_from_url("https://github.com/org/repo/pull/7/files") == 7
-        )
+        url = "https://github.com/org/repo/pull/7/files"
+        assert PipelineEngine._extract_pr_number_from_url(url) == 7
 
     def test_url_with_query(self):
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
 
         assert (
-            RalphLoop._extract_pr_number_from_url("https://github.com/org/repo/pull/99?diff=split")
+            PipelineEngine._extract_pr_number_from_url(
+                "https://github.com/org/repo/pull/99?diff=split"
+            )
             == 99
         )
 
     def test_not_a_pr_url(self):
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
 
-        assert RalphLoop._extract_pr_number_from_url("https://github.com/org/repo/issues/5") == 0
+        url = "https://github.com/org/repo/issues/5"
+        assert PipelineEngine._extract_pr_number_from_url(url) == 0
 
     def test_empty_string(self):
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
 
-        assert RalphLoop._extract_pr_number_from_url("") == 0
+        assert PipelineEngine._extract_pr_number_from_url("") == 0
 
 
 # ------------------------------------------------------------------
@@ -400,7 +403,7 @@ class TestPostCIPRComment:
         from engine.config import EngineConfig
         from engine.integrations.llm import MockProvider
 
-        return RalphLoop(
+        return PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/org/repo/issues/1",
@@ -529,7 +532,7 @@ class TestCIMonitoringLoopComment:
             ci_poll_timeout_minutes=1,
         )
 
-        lp = RalphLoop(
+        lp = PipelineEngine(
             config=config,
             llm=MockProvider(),
             issue_url="https://github.com/org/repo/issues/1",
@@ -642,7 +645,7 @@ class TestImports:
         assert hasattr(ci_monitor, "CIRemediationHistory")
 
     def test_loop_import(self):
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
 
-        assert hasattr(RalphLoop, "_post_ci_pr_comment")
-        assert hasattr(RalphLoop, "_extract_pr_number_from_url")
+        assert hasattr(PipelineEngine, "_post_ci_pr_comment")
+        assert hasattr(PipelineEngine, "_extract_pr_number_from_url")

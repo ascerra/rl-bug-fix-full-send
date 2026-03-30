@@ -168,8 +168,11 @@ class TestSuggestFix:
     def test_known_code(self):
         assert "logger" in _suggest_fix("GP001").lower() or "log" in _suggest_fix("GP001").lower()
         assert "untrusted" in _suggest_fix("GP003").lower()
-        assert "max_iterations" in _suggest_fix("GP005") or "time_budget" in _suggest_fix("GP005")
+        sug5 = _suggest_fix("GP005")
+        assert "PipelineEngine" in sug5
+        assert "max_iterations" in sug5 or "time_budget" in sug5
         assert "provenance" in _suggest_fix("GP008").lower()
+        assert "PipelineEngine" in _suggest_fix("GP009")
 
     def test_unknown_code_returns_generic(self):
         assert "SPEC.md" in _suggest_fix("GP999")
@@ -210,7 +213,7 @@ def _make_engine_dir(tmp_path: Path) -> Path:
 
     (engine / "loop.py").write_text(
         textwrap.dedent("""\
-        class RalphLoop:
+        class PipelineEngine:
             async def run(self):
                 if self.iteration >= self.config.loop.max_iterations:
                     return
@@ -262,7 +265,7 @@ def _make_violation_engine(tmp_path: Path) -> Path:
     (tools / "__init__.py").write_text("")
     (tools / "executor.py").write_text("class ToolExecutor:\n    pass\n")
 
-    (engine / "loop.py").write_text("class RalphLoop:\n    pass\n")
+    (engine / "loop.py").write_text("class PipelineEngine:\n    pass\n")
 
     return engine
 

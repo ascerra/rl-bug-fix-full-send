@@ -5,7 +5,7 @@ each executing an OODA cycle (observe → plan → act → validate → reflect)
 Manages phase transitions, bounded backtracking (implement↔review), iteration caps,
 time budgets, and escalation. After validate creates a PR, the engine monitors the
 target repo's CI and enters a CI remediation sub-loop if failures are detected.
-Developed and maintained using the Ralph Loop methodology.
+Developed and maintained using the Ralph Loop methodology (see README.md).
 """
 
 from __future__ import annotations
@@ -67,7 +67,7 @@ class ExecutionRecord:
 PHASE_ORDER = ["triage", "implement", "review", "validate", "report"]
 
 
-class RalphLoop:
+class PipelineEngine:
     """The phased pipeline engine.
 
     Executes phases in sequence, managing transitions and bounded backtracking.
@@ -134,16 +134,16 @@ class RalphLoop:
         Returns the complete ExecutionRecord with all iterations, metrics, and actions.
         """
         self._start_time = time.monotonic()
-        self.logger.info(f"Starting Ralph Loop for issue: {self.issue_url}")
+        self.logger.info(f"Starting RL Engine for issue: {self.issue_url}")
         self.logger.info(f"Target repo: {self.repo_path}")
         self.logger.info(
             f"Max iterations: {self.config.loop.max_iterations}, "
             f"Time budget: {self.config.loop.time_budget_minutes}m"
         )
 
-        self.logger.write_progress_heading("# Ralph Loop Progress")
+        self.logger.write_progress_heading("# RL Engine Progress")
         self.logger.narrate(
-            f"Starting Ralph Loop for {self.issue_url} "
+            f"Starting RL Engine for {self.issue_url} "
             f"(max {self.config.loop.max_iterations} iterations, "
             f"{self.config.loop.time_budget_minutes}m budget)"
         )
@@ -337,11 +337,11 @@ class RalphLoop:
 
         total_min = (time.monotonic() - self._start_time) / 60
         self.logger.narrate(
-            f"Ralph Loop complete: status={status}, "
+            f"RL Engine complete: status={status}, "
             f"{self._total_iterations} iterations, {total_min:.1f}m elapsed"
         )
         self.logger.info(
-            f"Ralph Loop complete: status={status}, iterations={self._total_iterations}"
+            f"RL Engine complete: status={status}, iterations={self._total_iterations}"
         )
         self.logger.flush()
 

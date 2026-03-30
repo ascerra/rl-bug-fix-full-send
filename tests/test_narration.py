@@ -23,7 +23,7 @@ import pytest
 
 from engine.config import EngineConfig
 from engine.integrations.llm import LLMResponse, MockProvider
-from engine.loop import RalphLoop
+from engine.loop import PipelineEngine
 from engine.observability.logger import StructuredLogger
 from engine.observability.metrics import LoopMetrics
 from engine.observability.tracer import Tracer
@@ -305,7 +305,7 @@ class TestLoopNarration:
         tmp_path: Path,
         provider: MockProvider | None = None,
         config: EngineConfig | None = None,
-    ) -> RalphLoop:
+    ) -> PipelineEngine:
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=str(repo), capture_output=True)
@@ -328,7 +328,7 @@ class TestLoopNarration:
         cfg.phases.validate.full_test_suite = False
         cfg.phases.validate.ci_equivalent = False
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=provider or MockProvider(),
             issue_url="https://github.com/org/repo/issues/1",
@@ -354,7 +354,7 @@ class TestLoopNarration:
 
         narrations = loop.logger.get_narrations()
         messages = [n["message"] for n in narrations]
-        assert any("Starting Ralph Loop" in m for m in messages)
+        assert any("Starting RL Engine" in m for m in messages)
 
     @pytest.mark.asyncio
     async def test_loop_narrates_phase_start(self, tmp_path: Path):
@@ -390,7 +390,7 @@ class TestLoopNarration:
 
         narrations = loop.logger.get_narrations()
         messages = [n["message"] for n in narrations]
-        assert any("Ralph Loop complete" in m for m in messages)
+        assert any("RL Engine complete" in m for m in messages)
 
     @pytest.mark.asyncio
     async def test_loop_narrates_escalation(self, tmp_path: Path):
@@ -426,7 +426,7 @@ class TestLoopNarration:
         progress_path = tmp_path / "output" / "progress.md"
         assert progress_path.exists()
         content = progress_path.read_text()
-        assert "# Ralph Loop Progress" in content
+        assert "# RL Engine Progress" in content
         assert "## Iteration" in content
 
     @pytest.mark.asyncio
@@ -688,7 +688,7 @@ class TestValidateNarration:
 class TestProgressMdStructure:
     """Test the overall structure of progress.md from a full loop execution."""
 
-    def _make_loop(self, tmp_path: Path, provider: MockProvider) -> RalphLoop:
+    def _make_loop(self, tmp_path: Path, provider: MockProvider) -> PipelineEngine:
         repo = tmp_path / "repo"
         repo.mkdir()
         subprocess.run(["git", "init"], cwd=str(repo), capture_output=True)
@@ -711,7 +711,7 @@ class TestProgressMdStructure:
         cfg.phases.validate.full_test_suite = False
         cfg.phases.validate.ci_equivalent = False
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=provider,
             issue_url="https://github.com/org/repo/issues/42",
@@ -739,9 +739,9 @@ class TestProgressMdStructure:
         assert progress_path.exists()
         content = progress_path.read_text()
 
-        assert "# Ralph Loop Progress" in content
+        assert "# RL Engine Progress" in content
         assert "## Iteration" in content
-        assert "Ralph Loop complete" in content
+        assert "RL Engine complete" in content
 
     @pytest.mark.asyncio
     async def test_narrations_have_timestamps(self, tmp_path: Path):

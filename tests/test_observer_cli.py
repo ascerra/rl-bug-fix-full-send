@@ -34,7 +34,7 @@ from engine.observer.cli import parse_args
 # Fixtures
 # ---------------------------------------------------------------------------
 
-WORKFLOW_PATH = Path(__file__).parent.parent / ".github" / "workflows" / "ralph-loop.yml"
+WORKFLOW_PATH = Path(__file__).parent.parent / ".github" / "workflows" / "rl-engine.yml"
 
 
 _SENTINEL = object()
@@ -606,7 +606,7 @@ class TestWorkflowYAML:
 
     def test_observer_needs_agent_job(self):
         observer = self.workflow["jobs"]["observer"]
-        assert "run-ralph-loop" in observer["needs"]
+        assert "run-engine" in observer["needs"]
 
     def test_observer_runs_always(self):
         observer = self.workflow["jobs"]["observer"]
@@ -665,7 +665,7 @@ class TestWorkflowYAML:
         assert any("--artifacts-dir" in r for r in run_steps)
 
     def test_agent_job_has_outputs(self):
-        agent_job = self.workflow["jobs"]["run-ralph-loop"]
+        agent_job = self.workflow["jobs"]["run-engine"]
         assert "outputs" in agent_job
 
     def test_observer_timeout(self):

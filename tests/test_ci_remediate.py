@@ -25,7 +25,7 @@ import pytest
 
 from engine.config import CIRemediationConfig, EngineConfig
 from engine.integrations.llm import MockProvider
-from engine.loop import PHASE_ORDER, RalphLoop
+from engine.loop import PHASE_ORDER, PipelineEngine
 from engine.observability.logger import StructuredLogger
 from engine.observability.metrics import LoopMetrics
 from engine.observability.tracer import Tracer
@@ -622,15 +622,15 @@ class TestLoopHelpers:
             success=True,
             artifacts={"pr_created": True, "pr_url": "https://github.com/o/r/pull/1"},
         )
-        assert RalphLoop._pr_was_created(result) is True
+        assert PipelineEngine._pr_was_created(result) is True
 
     def test_pr_was_created_false(self):
         result = PhaseResult(phase="validate", success=True, artifacts={"pr_created": False})
-        assert RalphLoop._pr_was_created(result) is False
+        assert PipelineEngine._pr_was_created(result) is False
 
     def test_pr_was_created_missing(self):
         result = PhaseResult(phase="validate", success=True, artifacts={})
-        assert RalphLoop._pr_was_created(result) is False
+        assert PipelineEngine._pr_was_created(result) is False
 
     def test_extract_branch_from_pr_url(self):
         result = PhaseResult(
@@ -638,7 +638,7 @@ class TestLoopHelpers:
             success=True,
             artifacts={"pr_url": "https://github.com/org/repo/pull/1?head=rl/fix-123-abc"},
         )
-        branch = RalphLoop._extract_branch_from_pr(result)
+        branch = PipelineEngine._extract_branch_from_pr(result)
         assert branch == "rl/fix-123-abc"
 
     def test_extract_branch_from_artifacts_key(self):
@@ -647,22 +647,22 @@ class TestLoopHelpers:
             success=True,
             artifacts={"pr_url": "https://github.com/o/r/pull/1", "branch_name": "rl/fix-42-xyz"},
         )
-        branch = RalphLoop._extract_branch_from_pr(result)
+        branch = PipelineEngine._extract_branch_from_pr(result)
         assert "rl/fix" in branch
 
     def test_extract_branch_empty(self):
         result = PhaseResult(phase="validate", success=True, artifacts={"pr_url": ""})
-        assert RalphLoop._extract_branch_from_pr(result) == ""
+        assert PipelineEngine._extract_branch_from_pr(result) == ""
 
     def test_extract_repo_parts(self):
-        parts = RalphLoop._extract_repo_parts_from_url("https://github.com/org/repo/pull/1")
+        parts = PipelineEngine._extract_repo_parts_from_url("https://github.com/org/repo/pull/1")
         assert parts == ("org", "repo")
 
     def test_extract_repo_parts_no_github(self):
-        assert RalphLoop._extract_repo_parts_from_url("https://gitlab.com/x/y") is None
+        assert PipelineEngine._extract_repo_parts_from_url("https://gitlab.com/x/y") is None
 
     def test_extract_repo_parts_short(self):
-        assert RalphLoop._extract_repo_parts_from_url("https://github.com/only") is None
+        assert PipelineEngine._extract_repo_parts_from_url("https://github.com/only") is None
 
 
 class TestCIMonitoringDisabled:
@@ -671,7 +671,7 @@ class TestCIMonitoringDisabled:
         config = EngineConfig()
         config.ci_remediation.enabled = False
         llm = MockProvider(responses=["{}"])
-        loop = RalphLoop(config=config, llm=llm, issue_url="url", repo_path="/tmp")
+        loop = PipelineEngine(config=config, llm=llm, issue_url="url", repo_path="/tmp")
         validate_result = PhaseResult(
             phase="validate",
             success=True,
@@ -684,7 +684,7 @@ class TestCIMonitoringDisabled:
     async def test_no_token_skips(self):
         config = EngineConfig()
         llm = MockProvider(responses=["{}"])
-        loop = RalphLoop(config=config, llm=llm, issue_url="url", repo_path="/tmp")
+        loop = PipelineEngine(config=config, llm=llm, issue_url="url", repo_path="/tmp")
         validate_result = PhaseResult(
             phase="validate",
             success=True,
@@ -696,12 +696,12 @@ class TestCIMonitoringDisabled:
 
 
 class TestCIMonitoringLoop:
-    def _make_loop(self, ci_config: CIRemediationConfig | None = None) -> RalphLoop:
+    def _make_loop(self, ci_config: CIRemediationConfig | None = None) -> PipelineEngine:
         config = EngineConfig()
         if ci_config:
             config.ci_remediation = ci_config
         llm = MockProvider(responses=[_make_llm_response()] * 10)
-        loop = RalphLoop(config=config, llm=llm, issue_url="url", repo_path="/tmp")
+        loop = PipelineEngine(config=config, llm=llm, issue_url="url", repo_path="/tmp")
         loop._start_time = time.monotonic()
         return loop
 
@@ -1046,7 +1046,7 @@ class TestCIMonitoringLoop:
     async def test_no_branch_skips(self):
         config = EngineConfig()
         llm = MockProvider(responses=["{}"])
-        loop = RalphLoop(config=config, llm=llm, issue_url="url", repo_path="/tmp")
+        loop = PipelineEngine(config=config, llm=llm, issue_url="url", repo_path="/tmp")
         loop._start_time = time.monotonic()
 
         validate_result = PhaseResult(
@@ -1071,7 +1071,7 @@ class TestCIRemediateNotRegistered:
 
         config = EngineConfig()
         llm = MockProvider(responses=["{}"])
-        loop = RalphLoop(config=config, llm=llm, issue_url="url", repo_path="/tmp")
+        loop = PipelineEngine(config=config, llm=llm, issue_url="url", repo_path="/tmp")
         loop._start_time = time.monotonic()
 
         result = await loop._execute_ci_remediation(

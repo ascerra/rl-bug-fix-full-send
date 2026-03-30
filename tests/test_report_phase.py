@@ -16,7 +16,7 @@ import pytest
 
 from engine.config import EngineConfig, LoopConfig
 from engine.integrations.llm import MockProvider
-from engine.loop import PHASE_ORDER, RalphLoop
+from engine.loop import PHASE_ORDER, PipelineEngine
 from engine.observability.logger import StructuredLogger
 from engine.observability.metrics import LoopMetrics
 from engine.observability.tracer import Tracer
@@ -501,7 +501,7 @@ class TestLoopIntegration:
             registry[name] = _make_stub(name, _success_result(name, next_p))
         registry["report"] = SpyReportPhase
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -553,7 +553,7 @@ class TestLoopIntegration:
             registry[name] = _make_stub(name, _success_result(name, next_p))
         registry["report"] = PublishingReportPhase
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -585,7 +585,7 @@ class TestLoopIntegration:
                 continue
             registry[name] = _make_stub(name, _success_result(name, next_p))
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -594,7 +594,8 @@ class TestLoopIntegration:
             phase_registry=registry,
         )
 
-        with patch("engine.loop.RalphLoop._publish_reports", wraps=loop._publish_reports) as spy:
+        target = "engine.loop.PipelineEngine._publish_reports"
+        with patch(target, wraps=loop._publish_reports) as spy:
             await loop.run()
 
         spy.assert_called_once()

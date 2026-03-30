@@ -864,4 +864,4 @@ class TestFullPipeline:
         gen = ReportGenerator()
         html = gen.generate(_minimal_execution())
         assert len(html) > 1000
-        assert "Ralph Loop" in html
+        assert "RL Engine" in html

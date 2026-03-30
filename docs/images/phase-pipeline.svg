@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 320" font-family="Segoe UI, system-ui, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 380" font-family="Segoe UI, system-ui, sans-serif">
   <defs>
     <marker id="arrow" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto">
       <path d="M0,0 L10,3 L0,6 Z" fill="#475569"/>
@@ -6,10 +6,13 @@
     <marker id="arrow-red" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto">
       <path d="M0,0 L10,3 L0,6 Z" fill="#dc2626"/>
     </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 6" refX="10" refY="3" markerWidth="10" markerHeight="6" orient="auto">
+      <path d="M0,0 L10,3 L0,6 Z" fill="#d97706"/>
+    </marker>
   </defs>
 
-  <text x="460" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#1e293b">Ralph Loop Phase Pipeline</text>
-  <text x="460" y="46" text-anchor="middle" font-size="11" fill="#64748b">Each phase runs a full OODA cycle (Observe ? Plan ? Act ? Validate ? Reflect)</text>
+  <text x="480" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#1e293b">RL Engine Phase Pipeline</text>
+  <text x="480" y="46" text-anchor="middle" font-size="11" fill="#64748b">Each phase runs a full OODA cycle (Observe → Plan → Act → Validate → Reflect)</text>
 
   <!-- GitHub Issue input -->
   <rect x="10" y="100" width="100" height="60" rx="8" fill="#f1f5f9" stroke="#cbd5e1" stroke-width="1.5"/>
@@ -19,69 +22,89 @@
   <line x1="110" y1="130" x2="140" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- Triage -->
-  <rect x="142" y="80" width="120" height="100" rx="10" fill="#3b82f6"/>
-  <text x="202" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">TRIAGE</text>
-  <text x="202" y="126" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Classify severity</text>
-  <text x="202" y="139" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Find affected files</text>
-  <text x="202" y="152" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Attempt repro</text>
-  <text x="202" y="165" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Detect repo stack</text>
+  <rect x="142" y="80" width="110" height="100" rx="10" fill="#3b82f6"/>
+  <text x="197" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">TRIAGE</text>
+  <text x="197" y="126" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Classify severity</text>
+  <text x="197" y="139" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Find affected files</text>
+  <text x="197" y="152" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Attempt repro</text>
+  <text x="197" y="165" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Detect repo stack</text>
 
-  <line x1="262" y1="130" x2="292" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="252" y1="130" x2="278" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- Implement -->
-  <rect x="294" y="80" width="120" height="100" rx="10" fill="#8b5cf6"/>
-  <text x="354" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">IMPLEMENT</text>
-  <text x="354" y="126" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Identify root cause</text>
-  <text x="354" y="139" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Write minimal fix</text>
-  <text x="354" y="152" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Run linters</text>
-  <text x="354" y="165" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Inner iteration loop</text>
+  <rect x="280" y="80" width="110" height="100" rx="10" fill="#8b5cf6"/>
+  <text x="335" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">IMPLEMENT</text>
+  <text x="335" y="126" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Identify root cause</text>
+  <text x="335" y="139" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Write minimal fix</text>
+  <text x="335" y="152" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Run linters</text>
+  <text x="335" y="165" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Inner iteration loop</text>
 
-  <line x1="414" y1="130" x2="444" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="390" y1="130" x2="416" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- Review -->
-  <rect x="446" y="80" width="120" height="100" rx="10" fill="#06b6d4"/>
-  <text x="506" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">REVIEW</text>
-  <text x="506" y="126" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Zero-trust review</text>
-  <text x="506" y="139" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Correctness check</text>
-  <text x="506" y="152" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Security scan</text>
-  <text x="506" y="165" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Path consistency</text>
+  <rect x="418" y="80" width="110" height="100" rx="10" fill="#06b6d4"/>
+  <text x="473" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">REVIEW</text>
+  <text x="473" y="126" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Zero-trust review</text>
+  <text x="473" y="139" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Correctness check</text>
+  <text x="473" y="152" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Security scan</text>
+  <text x="473" y="165" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Path consistency</text>
 
-  <line x1="566" y1="130" x2="596" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="528" y1="130" x2="554" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- Validate -->
-  <rect x="598" y="80" width="120" height="100" rx="10" fill="#10b981"/>
-  <text x="658" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">VALIDATE</text>
-  <text x="658" y="126" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Verify minimal diff</text>
-  <text x="658" y="139" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Generate PR desc</text>
-  <text x="658" y="152" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Create PR</text>
-  <text x="658" y="165" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Monitor CI status</text>
+  <rect x="556" y="80" width="110" height="100" rx="10" fill="#10b981"/>
+  <text x="611" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">VALIDATE</text>
+  <text x="611" y="126" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Verify minimal diff</text>
+  <text x="611" y="139" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Push branch</text>
+  <text x="611" y="152" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Create PR</text>
+  <text x="611" y="165" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Monitor CI status</text>
 
-  <line x1="718" y1="130" x2="748" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <line x1="666" y1="130" x2="692" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- CI Remediate -->
+  <rect x="694" y="80" width="110" height="100" rx="10" fill="#d97706" opacity="0.9"/>
+  <text x="749" y="107" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">CI</text>
+  <text x="749" y="122" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">REMEDIATE</text>
+  <text x="749" y="139" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Categorize failure</text>
+  <text x="749" y="152" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Fix or rerun</text>
+  <text x="749" y="165" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Re-push + poll</text>
+
+  <line x1="804" y1="130" x2="830" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
 
   <!-- Report -->
-  <rect x="750" y="80" width="120" height="100" rx="10" fill="#f59e0b"/>
-  <text x="810" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">REPORT</text>
-  <text x="810" y="126" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Decision tree</text>
-  <text x="810" y="139" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Action map</text>
-  <text x="810" y="152" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">HTML report</text>
-  <text x="810" y="165" text-anchor="middle" font-size="10" fill="#fff" opacity="0.9">Execution summary</text>
+  <rect x="832" y="80" width="100" height="100" rx="10" fill="#f59e0b"/>
+  <text x="882" y="110" text-anchor="middle" font-size="13" font-weight="700" fill="#fff">REPORT</text>
+  <text x="882" y="126" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">3D scene</text>
+  <text x="882" y="139" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Decision tree</text>
+  <text x="882" y="152" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Action map</text>
+  <text x="882" y="165" text-anchor="middle" font-size="9" fill="#fff" opacity="0.9">Narrative</text>
 
   <!-- Output -->
-  <line x1="870" y1="130" x2="905" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
-  <text x="912" y="126" font-size="10" font-weight="600" fill="#475569">PR +</text>
-  <text x="912" y="139" font-size="10" font-weight="600" fill="#475569">Evidence</text>
+  <line x1="932" y1="130" x2="952" y2="130" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+  <text x="938" y="112" font-size="9" font-weight="600" fill="#475569">PR +</text>
+  <text x="938" y="150" font-size="9" font-weight="600" fill="#475569">Evidence</text>
 
   <!-- Review reject loop -->
-  <path d="M 506,180 L 506,240 Q 506,260 486,260 L 374,260 Q 354,260 354,240 L 354,180" stroke="#dc2626" stroke-width="2" fill="none" stroke-dasharray="6,3" marker-end="url(#arrow-red)"/>
-  <text x="430" y="255" text-anchor="middle" font-size="10" fill="#dc2626" font-weight="600">request_changes</text>
-  <text x="430" y="270" text-anchor="middle" font-size="10" fill="#dc2626" font-weight="600">(with specific suggestions)</text>
+  <path d="M 473,180 L 473,235 Q 473,255 453,255 L 355,255 Q 335,255 335,235 L 335,180" stroke="#dc2626" stroke-width="2" fill="none" stroke-dasharray="6,3" marker-end="url(#arrow-red)"/>
+  <text x="404" y="250" text-anchor="middle" font-size="9" fill="#dc2626" font-weight="600">request_changes</text>
+  <text x="404" y="265" text-anchor="middle" font-size="9" fill="#dc2626">(with suggestions)</text>
+
+  <!-- CI Remediate loop back to fix -->
+  <path d="M 749,180 L 749,295 Q 749,315 729,315 L 355,315 Q 335,315 335,295 L 335,180" stroke="#d97706" stroke-width="2" fill="none" stroke-dasharray="6,3" marker-end="url(#arrow-amber)"/>
+  <text x="542" y="310" text-anchor="middle" font-size="9" fill="#d97706" font-weight="600">CI failure → fix → re-push → re-monitor</text>
+  <text x="542" y="325" text-anchor="middle" font-size="9" fill="#d97706">(max 3 iterations, own time budget)</text>
 
   <!-- Escalate path -->
-  <line x1="202" y1="180" x2="202" y2="300" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
-  <text x="202" y="313" text-anchor="middle" font-size="10" fill="#f59e0b" font-weight="600">Escalate to human</text>
+  <line x1="197" y1="180" x2="197" y2="355" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+  <text x="197" y="370" text-anchor="middle" font-size="9" fill="#f59e0b" font-weight="600">Escalate to human</text>
+
+  <!-- Implement-first note -->
+  <rect x="556" y="195" width="110" height="38" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="611" y="210" text-anchor="middle" font-size="8" font-weight="600" fill="#92400e">Implement-first:</text>
+  <text x="611" y="222" text-anchor="middle" font-size="8" fill="#92400e">push only after approval</text>
 
   <!-- Tests disabled note -->
-  <rect x="598" y="200" width="120" height="40" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
-  <text x="658" y="217" text-anchor="middle" font-size="9" font-weight="600" fill="#92400e">Tests: disabled</text>
-  <text x="658" y="230" text-anchor="middle" font-size="9" fill="#92400e">CI validates post-PR</text>
+  <rect x="694" y="195" width="110" height="38" rx="6" fill="#fef3c7" stroke="#f59e0b" stroke-width="1"/>
+  <text x="749" y="210" text-anchor="middle" font-size="8" font-weight="600" fill="#92400e">Tests: disabled locally</text>
+  <text x="749" y="222" text-anchor="middle" font-size="8" fill="#92400e">CI validates post-PR</text>
 </svg>

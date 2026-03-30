@@ -1,5 +1,5 @@
 /**
- * Three.js Scene Renderer for Ralph Loop Execution Reports.
+ * Three.js Scene Renderer for RL Engine Execution Reports.
  *
  * Reads the SceneData JSON produced by engine/visualization/scene/builder.py
  * and renders an interactive 3D execution landscape with:

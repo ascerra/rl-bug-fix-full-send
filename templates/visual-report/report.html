@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ralph Loop Report — {{ report.execution_id[:8] }}</title>
+<title>RL Engine Report — {{ report.execution_id[:8] }}</title>
 <style>
   :root {
     --bg: #0d1117;
@@ -25,9 +25,8 @@
     background: var(--bg);
     color: var(--text);
     line-height: 1.6;
-    padding: 2rem;
-    max-width: 1440px;
-    margin: 0 auto;
+    margin: 0;
+    padding: 0;
   }
   a { color: var(--accent); text-decoration: none; }
   a:hover { text-decoration: underline; }
@@ -247,13 +246,203 @@
   /* Comparison Report */
   .comparison-header { display: flex; align-items: center; gap: 1rem; flex-wrap: wrap; }
   .comparison-analysis { background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 0.75rem; line-height: 1.7; color: var(--text-muted); white-space: pre-wrap; }
+
+  /* Agent Sidebar */
+  .agent-sidebar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 260px;
+    height: 100vh;
+    background: var(--surface);
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    z-index: 100;
+    padding: 1rem 0;
+    transition: transform 0.3s ease;
+  }
+  .agent-sidebar-title {
+    font-size: 0.7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    padding: 0 1rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 0.5rem;
+  }
+  .agent-card {
+    display: block;
+    padding: 0.6rem 1rem;
+    border-left: 3px solid transparent;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-decoration: none;
+    color: var(--text);
+  }
+  .agent-card:hover {
+    background: var(--surface-hover);
+    text-decoration: none;
+  }
+  .agent-card.active {
+    border-left-color: var(--accent);
+    background: rgba(88,166,255,0.06);
+  }
+  .agent-card.agent-success { border-left-color: var(--success); }
+  .agent-card.agent-failure { border-left-color: var(--failure); }
+  .agent-card.agent-success.active { border-left-color: var(--success); background: rgba(63,185,80,0.06); }
+  .agent-card.agent-failure.active { border-left-color: var(--failure); background: rgba(248,81,73,0.06); }
+  .agent-card-header {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-bottom: 0.2rem;
+  }
+  .agent-icon { font-size: 0.95rem; line-height: 1; }
+  .agent-name {
+    font-weight: 600;
+    font-size: 0.82rem;
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .agent-status-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .agent-status-dot.dot-success { background: var(--success); }
+  .agent-status-dot.dot-failure { background: var(--failure); }
+  .agent-meta {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+  }
+  .agent-github-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    font-size: 0.68rem;
+    color: var(--accent);
+    opacity: 0.7;
+    transition: opacity 0.15s;
+    margin-top: 0.25rem;
+  }
+  .agent-github-link:hover { opacity: 1; text-decoration: underline; }
+  .agent-github-link svg {
+    width: 12px;
+    height: 12px;
+    fill: currentColor;
+  }
+  .agent-sidebar-section {
+    padding: 0.5rem 1rem 0.25rem;
+    font-size: 0.65rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
+    margin-top: 0.25rem;
+  }
+
+  /* Sidebar toggle for mobile */
+  .sidebar-toggle {
+    display: none;
+    position: fixed;
+    top: 0.75rem;
+    left: 0.75rem;
+    z-index: 150;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text);
+    padding: 0.4rem 0.6rem;
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+  }
+  .sidebar-toggle:hover { background: var(--surface-hover); }
+
+  /* Shift main content when sidebar is visible */
+  .main-content {
+    margin-left: 260px;
+    padding: 2rem;
+    max-width: 1440px;
+  }
+
+  @media (max-width: 1100px) {
+    .agent-sidebar { transform: translateX(-100%); }
+    .agent-sidebar.open { transform: translateX(0); }
+    .sidebar-toggle { display: block; }
+    .main-content { margin-left: 0; padding-top: 3rem; }
+  }
 </style>
 </head>
 <body>
 
+<!-- Sidebar Toggle (mobile) -->
+<button class="sidebar-toggle" id="sidebar-toggle" aria-label="Toggle agent sidebar">&#x2630;</button>
+
+<!-- Agent Sidebar -->
+{% if report.agents %}
+<nav class="agent-sidebar" id="agent-sidebar">
+  <div class="agent-sidebar-title">Agents</div>
+  {% for agent in report.agents %}
+  <a class="agent-card agent-{{ agent.status }}" href="#agent-section-{{ agent.name }}" data-agent="{{ agent.name }}">
+    <div class="agent-card-header">
+      <span class="agent-icon">{{ agent.icon }}</span>
+      <span class="agent-name">{{ agent.display_name }}</span>
+      <span class="agent-status-dot dot-{{ agent.status }}"></span>
+    </div>
+    <div class="agent-meta">
+      <span>{{ agent.duration_ms|format_duration }}</span>
+      <span>&middot;</span>
+      <span>{{ agent.iterations }} iter</span>
+      <span>&middot;</span>
+      <span>{{ agent.llm_calls }} llm</span>
+    </div>
+    {% if engine_repo_url %}
+    <span class="agent-github-link" onclick="event.stopPropagation()" title="View {{ agent.source_file }} on GitHub">
+      <a href="{{ engine_repo_url }}/blob/main/{{ agent.source_file }}" target="_blank" rel="noopener" class="agent-github-link">
+        <svg viewBox="0 0 16 16"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg>
+        source
+      </a>
+    </span>
+    {% endif %}
+  </a>
+  {% endfor %}
+
+  <div class="agent-sidebar-section">Sections</div>
+  <a class="agent-card" href="#section-phase-summary" style="border-left-color: transparent;">
+    <div class="agent-card-header"><span class="agent-name" style="font-size:0.78rem;">Phase Summary</span></div>
+  </a>
+  <a class="agent-card" href="#section-decision-tree" style="border-left-color: transparent;">
+    <div class="agent-card-header"><span class="agent-name" style="font-size:0.78rem;">Decision Tree</span></div>
+  </a>
+  <a class="agent-card" href="#section-action-map" style="border-left-color: transparent;">
+    <div class="agent-card-header"><span class="agent-name" style="font-size:0.78rem;">Action Map</span></div>
+  </a>
+  <a class="agent-card" href="#section-timeline" style="border-left-color: transparent;">
+    <div class="agent-card-header"><span class="agent-name" style="font-size:0.78rem;">Iteration Timeline</span></div>
+  </a>
+  <a class="agent-card" href="#section-llm-log" style="border-left-color: transparent;">
+    <div class="agent-card-header"><span class="agent-name" style="font-size:0.78rem;">LLM Inference Log</span></div>
+  </a>
+  <a class="agent-card" href="#section-actions-log" style="border-left-color: transparent;">
+    <div class="agent-card-header"><span class="agent-name" style="font-size:0.78rem;">Actions Log</span></div>
+  </a>
+</nav>
+{% endif %}
+
+<!-- Main Content -->
+<div class="main-content">
+
 <div class="header">
   <div class="header-left">
-    <h1>Ralph Loop Execution Report</h1>
+    <h1>RL Engine Execution Report</h1>
     <div class="header-meta">
       Execution <span class="mono">{{ report.execution_id[:12] or 'N/A' }}</span>
       {% if report.trigger.get('source_url') %}
@@ -348,7 +537,7 @@
 {% endif %}
 
 <!-- Phase Summary -->
-<h2>Phase Summary</h2>
+<h2 id="section-phase-summary">Phase Summary</h2>
 {% if report.phases_summary %}
 <div class="card">
   <table>
@@ -365,7 +554,7 @@
     </thead>
     <tbody>
       {% for phase in report.phases_summary %}
-      <tr>
+      <tr id="agent-section-{{ phase.phase }}">
         <td><strong>{{ phase.phase }}</strong></td>
         <td>
           {% if phase.successful %}
@@ -389,7 +578,7 @@
 {% endif %}
 
 <!-- Decision Tree -->
-<h2>Decision Tree</h2>
+<h2 id="section-decision-tree">Decision Tree</h2>
 <div class="card tree-split">
   <div id="decision-tree-container" class="tree-container"></div>
   <div id="decision-tree-detail" class="tree-detail-panel">
@@ -398,7 +587,7 @@
 </div>
 
 <!-- Action Map -->
-<h2>Action Map</h2>
+<h2 id="section-action-map">Action Map</h2>
 <div class="card tree-split">
   <div id="action-map-container" class="tree-container"></div>
   <div id="action-map-detail" class="tree-detail-panel">
@@ -524,7 +713,7 @@
 {% endif %}
 
 <!-- Iteration Timeline -->
-<h2>Iteration Timeline</h2>
+<h2 id="section-timeline">Iteration Timeline</h2>
 {% if report.iterations %}
 <div class="card">
   {% for it in report.iterations %}
@@ -546,7 +735,7 @@
 {% endif %}
 
 <!-- LLM Inference Log -->
-<h2>LLM Inference Log ({{ report.transcript_calls|length }} calls)</h2>
+<h2 id="section-llm-log">LLM Inference Log ({{ report.transcript_calls|length }} calls)</h2>
 {% if report.transcript_calls %}
 <p style="color:var(--text-muted);font-size:0.85rem;margin-bottom:1rem">
   Every LLM call with full system prompt, user message, and model response.
@@ -588,7 +777,7 @@
 {% endif %}
 
 <!-- Actions Log -->
-<h2>Actions Log ({{ report.actions|length }})</h2>
+<h2 id="section-actions-log">Actions Log ({{ report.actions|length }})</h2>
 {% if report.actions %}
 {% for action in report.actions %}
 <details>
@@ -697,10 +886,12 @@
 {% endif %}
 
 <footer>
-  Generated by Ralph Loop Engine | Execution {{ report.execution_id[:12] or 'N/A' }}
+  Generated by RL Bug Fix Engine | Execution {{ report.execution_id[:12] or 'N/A' }}
   {% if report.started_at %} | Started {{ report.started_at[:19] }}{% endif %}
   {% if report.completed_at %} | Completed {{ report.completed_at[:19] }}{% endif %}
 </footer>
+
+</div><!-- /.main-content -->
 
 <!-- D3.js (vendored, self-contained — no CDN) -->
 <script>
@@ -819,6 +1010,73 @@
 })();
 </script>
 {% endif %}
+
+<!-- Agent Sidebar: scroll tracking + mobile toggle -->
+<script>
+(function() {
+  var sidebar = document.getElementById('agent-sidebar');
+  var toggle = document.getElementById('sidebar-toggle');
+  if (!sidebar) return;
+
+  if (toggle) {
+    toggle.addEventListener('click', function() {
+      sidebar.classList.toggle('open');
+    });
+    document.addEventListener('click', function(e) {
+      if (sidebar.classList.contains('open') && !sidebar.contains(e.target) && e.target !== toggle) {
+        sidebar.classList.remove('open');
+      }
+    });
+  }
+
+  var agentCards = sidebar.querySelectorAll('.agent-card[data-agent]');
+  var agentSections = [];
+  for (var i = 0; i < agentCards.length; i++) {
+    var name = agentCards[i].getAttribute('data-agent');
+    var section = document.getElementById('agent-section-' + name);
+    if (section) agentSections.push({ name: name, el: section, card: agentCards[i] });
+  }
+
+  function updateActiveAgent() {
+    var scrollY = window.scrollY || window.pageYOffset;
+    var active = null;
+    for (var i = agentSections.length - 1; i >= 0; i--) {
+      if (agentSections[i].el.offsetTop - 120 <= scrollY) {
+        active = agentSections[i];
+        break;
+      }
+    }
+    for (var j = 0; j < agentSections.length; j++) {
+      agentSections[j].card.classList.toggle('active', agentSections[j] === active);
+    }
+  }
+
+  var ticking = false;
+  window.addEventListener('scroll', function() {
+    if (!ticking) {
+      requestAnimationFrame(function() {
+        updateActiveAgent();
+        ticking = false;
+      });
+      ticking = true;
+    }
+  });
+  updateActiveAgent();
+
+  sidebar.addEventListener('click', function(e) {
+    var card = e.target.closest('.agent-card');
+    if (!card) return;
+    var href = card.getAttribute('href');
+    if (!href || href.charAt(0) !== '#') return;
+    e.preventDefault();
+    var target = document.getElementById(href.substring(1));
+    if (target) {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      if (window.innerWidth <= 1100) sidebar.classList.remove('open');
+    }
+  });
+})();
+</script>
 
 </body>
 </html>

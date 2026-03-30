@@ -19,7 +19,7 @@ If the engine gets stuck, it **escalates to a human** with full context of every
 
 The engine runs entirely in **GitHub Actions** — no local setup required for production use.
 
-![Phase Pipeline](docs/images/phase-pipeline.png)
+![Phase Pipeline](docs/images/phase-pipeline.svg)
 
 ## Production Results
 
@@ -33,7 +33,7 @@ Both fixes identified the same root cause and used the same strategy (make temp 
 
 This analysis led directly to improvements: a **deterministic path-consistency checker** now catches these mismatches automatically (see [Continuous Improvement](#continuous-improvement)).
 
-![KONFLUX-11443 Comparison](docs/images/konflux-comparison.png)
+![KONFLUX-11443 Comparison](docs/images/konflux-comparison.svg)
 
 ## What is a Ralph Loop?
 
@@ -43,7 +43,7 @@ A Ralph Loop is our adaptation of the [Ralph Wiggum Loop](https://ghuntley.com/r
 
 A Ralph Loop **built this engine** — 64 iterations of a human + AI agent on a laptop, feeding production run failures back as context until the engine worked against real bugs. A Ralph Loop also **maintains** this engine — when a production run reveals a deficiency, the meta loop feeds that evidence into the next development session.
 
-![OODA Loop Cycle](docs/images/ooda-loop.png)
+![OODA Loop Cycle](docs/images/ooda-loop.svg)
 
 ### The Ralph Loop vs the Production Engine
 
@@ -59,7 +59,7 @@ The meta loop built the production system over 68 iterations (see [progress/run-
 
 ## Architecture
 
-![Engine Architecture](docs/images/architecture.png)
+![Engine Architecture](docs/images/architecture.svg)
 
 ### Engine Components
 
@@ -71,7 +71,7 @@ The meta loop built the production system over 68 iterations (see [progress/run-
 | **LLM** | `engine/integrations/llm.py` | Gemini (primary) + Anthropic (fallback), provider-agnostic interface |
 | **Integrations** | `engine/integrations/` | GitHub (core), Slack and Jira (optional, off by default) — all with injection guards |
 | **Observability** | `engine/observability/` | Structured JSON logging, action tracing, metrics, live narration |
-| **Visualization** | `engine/visualization/` | Self-contained HTML reports (no CDN dependencies, works offline), vendored Three.js 3D scene with OrbitControls, D3.js decision trees and action maps, comparison views with ghost objects, narrative detail drill-down panels, timeline scrubber, narrative summary landing page, configurable `visualization_engine` (threejs/d3) |
+| **Visualization** | `engine/visualization/` | Self-contained HTML reports (no CDN dependencies, works offline), vendored Three.js 3D scene with OrbitControls, D3.js decision trees and action maps, comparison views with ghost objects, narrative detail drill-down panels (`narrative/formatter.py`), timeline scrubber (`scene/timeline.py`), narrative summary landing page (`narrative/summary.py`), 3D scene graph builder (`scene/builder.py`), configurable `visualization_engine` (threejs/d3) |
 | **Security** | `engine/secrets.py` | Secret loading, validation, redaction across all outputs |
 | **Observer** | `engine/observer/` | Neutral observer: execution reconstruction, cross-checking, in-toto attestation, Sigstore signing, policy evaluation |
 | **Self-improvement** | `engine/golden_principles.py` | AST-based static analyzer enforcing 7 golden principles |
@@ -267,7 +267,7 @@ python -m engine --issue-url <ISSUE_URL> --target-repo <PATH> --output-dir ./out
 | `SLACK_BOT_TOKEN` | No | Slack notifications |
 | `JIRA_API_TOKEN` | No | Jira integration |
 
-2. Go to **Actions** → **Ralph Loop - Bug Fix Engine** → **Run workflow**
+2. Go to **Actions** → **RL Bug Fix Engine** → **Run workflow**
 3. Enter the issue URL and optional parameters
 4. View results in the workflow artifacts
 
@@ -295,7 +295,7 @@ rl-bug-fix-full-send/
 ├── prompt.md                       # Meta ralph loop instruction file
 │
 ├── .github/workflows/
-│   ├── ralph-loop.yml              # Main engine workflow
+│   ├── rl-engine.yml               # Main engine workflow
 │   └── quality-scan.yml            # Weekly background quality scan
 │
 ├── engine/                         # Python engine package
@@ -349,11 +349,17 @@ rl-bug-fix-full-send/
 │   │   └── ci_monitor.py           #   PR CI polling, failure categorisation, reruns, PR comment reporting
 │   │
 │   └── visualization/              # Report generation
-│       ├── report_generator.py     #   HTML via Jinja2 + D3.js
+│       ├── report_generator.py     #   HTML via Jinja2 + Three.js/D3.js
 │       ├── decision_tree.py        #   Interactive decision tree
 │       ├── action_map.py           #   Layered phase action map
 │       ├── comparison.py           #   Agent vs human fix comparison
-│       └── publisher.py            #   Report assembly + publishing
+│       ├── publisher.py            #   Report assembly + publishing
+│       ├── narrative/              #   Human-readable narrative generation
+│       │   ├── formatter.py        #     Action-to-narrative HTML formatter
+│       │   └── summary.py          #     Landing page story + metrics builder
+│       └── scene/                  #   3D scene generation (Three.js)
+│           ├── builder.py          #     Execution data → scene graph
+│           └── timeline.py         #     Timeline scrubber data generation
 │
 ├── templates/
 │   ├── prompts/                    # Phase-specific LLM prompts
@@ -370,9 +376,12 @@ rl-bug-fix-full-send/
 ├── scripts/
 │   ├── setup-fork.sh               # Fork + rollback for testing
 │   ├── meta-loop.sh                # CI runner (trigger → monitor → analyze)
+│   ├── meta_loop_agent.py          # LLM-powered auto-diagnosis for meta loop
+│   ├── run-ralph-loop.sh           # Local ralph loop runner
+│   ├── is-ralph-complete.py        # Completion check for ralph loop
 │   └── gen-progress.py             # Dashboard generator
 │
-├── tests/                          # 2983 tests
+├── tests/                          # 2986 tests
 │   ├── test_loop.py                #   55 loop behavior tests
 │   ├── test_e2e.py                 #   46 end-to-end pipeline tests
 │   ├── test_prompt_injection.py    #   127 injection defense tests
@@ -435,7 +444,7 @@ The system was built iteratively over **68 meta loop runs** using a Ralph Loop o
 | **Phase 9** | 3D Interactive Report Overhaul (Three.js scene builder, renderer, timeline, detail panels, narrative landing page, self-contained report assembly) | Complete |
 | **Phase 10** | Implement-First Workflow and CI Remediation | Complete |
 
-**2983 tests passing**, lint clean, golden principles enforced.
+**2986 tests passing**, lint clean, golden principles enforced.
 
 Key milestones from the development journey:
 
@@ -476,3 +485,6 @@ Key milestones from the development journey:
 | [IMPLEMENTATION-PLAN.md](IMPLEMENTATION-PLAN.md) | Phased build plan with completion status |
 | [prompt.md](prompt.md) | Meta ralph loop instructions |
 | [progress/run-log.md](progress/run-log.md) | Append-only history of all 68 meta loop runs |
+| [docs/full-review-and-fullsend-contribution.md](docs/full-review-and-fullsend-contribution.md) | Complete project review, production run analysis, and meta-loop experiment |
+| [docs/security-posture-examples.md](docs/security-posture-examples.md) | Annotated code examples for every security defense |
+| [docs/rl-engine-overview.html](docs/rl-engine-overview.html) | Interactive HTML overview of the engine architecture |

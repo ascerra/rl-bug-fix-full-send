@@ -446,7 +446,7 @@ class TestLoopOrdering:
         """Full loop runs review before validate."""
         import subprocess
 
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
         from engine.phases.implement import ImplementPhase
         from engine.phases.review import ReviewPhase
         from engine.phases.triage import TriagePhase
@@ -517,7 +517,7 @@ class TestLoopOrdering:
         cfg.phases.validate.full_test_suite = False
         cfg.phases.validate.ci_equivalent = False
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=MockProvider(responses=[triage_resp, impl_resp, review_resp, validate_resp]),
             issue_url="https://github.com/test/repo/issues/1",

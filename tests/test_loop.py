@@ -1,4 +1,4 @@
-"""Tests for the Ralph Loop orchestrator — phase dispatch, transitions, escalation.
+"""Tests for the RL Engine orchestrator — phase dispatch, transitions, escalation.
 
 Phase 5.2: Comprehensive loop behavior testing covering iteration cap enforcement,
 time budget enforcement, escalation behavior, and phase validation independence.
@@ -17,7 +17,7 @@ import pytest
 
 from engine.config import EngineConfig, LoopConfig
 from engine.integrations.llm import MockProvider
-from engine.loop import PHASE_ORDER, ExecutionRecord, RalphLoop
+from engine.loop import PHASE_ORDER, ExecutionRecord, PipelineEngine
 from engine.phases.base import (
     IMPLEMENT_TOOLS,
     PHASE_TOOL_SETS,
@@ -161,7 +161,7 @@ def mock_llm() -> MockProvider:
 
 @pytest.mark.asyncio
 async def test_loop_runs_all_phases_in_order(tmp_repo, output_dir, config, mock_llm):
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -179,7 +179,7 @@ async def test_loop_runs_all_phases_in_order(tmp_repo, output_dir, config, mock_
 
 @pytest.mark.asyncio
 async def test_loop_skips_unregistered_phases(tmp_repo, output_dir, config, mock_llm):
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -202,7 +202,7 @@ async def test_loop_skips_unregistered_phases(tmp_repo, output_dir, config, mock
 @pytest.mark.asyncio
 async def test_loop_iteration_cap(tmp_repo, output_dir, mock_llm):
     cfg = EngineConfig(loop=LoopConfig(max_iterations=2))
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=cfg,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -219,7 +219,7 @@ async def test_loop_iteration_cap(tmp_repo, output_dir, mock_llm):
 @pytest.mark.asyncio
 async def test_loop_time_budget_exceeded(tmp_repo, output_dir, mock_llm):
     cfg = EngineConfig(loop=LoopConfig(time_budget_minutes=0))
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=cfg,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -249,7 +249,7 @@ async def test_loop_escalation_from_phase(tmp_repo, output_dir, config, mock_llm
             ),
         ),
     }
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -272,7 +272,7 @@ async def test_loop_failure_stops(tmp_repo, output_dir, config, mock_llm):
         "implement",
         PhaseResult(phase="implement", success=False, should_continue=False),
     )
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -310,7 +310,7 @@ async def test_loop_review_rejection_backtracks(tmp_repo, output_dir, mock_llm):
             _success_result("review", "validate"),
         ],
     )
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=cfg,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -340,7 +340,7 @@ async def test_loop_review_rejection_escalates_after_threshold(tmp_repo, output_
             next_phase="implement",
         ),
     )
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=cfg,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -374,7 +374,7 @@ async def test_loop_retry_on_soft_failure(tmp_repo, output_dir, mock_llm):
         next_p = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
         registry[name] = _make_stub(name, _success_result(name, next_p))
 
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=cfg,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -419,7 +419,7 @@ async def test_loop_handles_phase_exception(tmp_repo, output_dir, config, mock_l
             return _success_result("triage")
 
     registry: dict[str, type[Phase]] = {"triage": _BrokenPhase}
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -439,7 +439,7 @@ async def test_loop_handles_phase_exception(tmp_repo, output_dir, config, mock_l
 
 @pytest.mark.asyncio
 async def test_loop_writes_execution_json(tmp_repo, output_dir, config, mock_llm):
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -459,7 +459,7 @@ async def test_loop_writes_execution_json(tmp_repo, output_dir, config, mock_llm
 
 @pytest.mark.asyncio
 async def test_loop_writes_status_txt(tmp_repo, output_dir, config, mock_llm):
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -481,7 +481,7 @@ async def test_loop_writes_status_txt(tmp_repo, output_dir, config, mock_llm):
 
 @pytest.mark.asyncio
 async def test_loop_metrics_populated(tmp_repo, output_dir, config, mock_llm):
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -503,7 +503,7 @@ async def test_loop_metrics_populated(tmp_repo, output_dir, config, mock_llm):
 
 @pytest.mark.asyncio
 async def test_iterations_recorded_with_timing(tmp_repo, output_dir, config, mock_llm):
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -543,7 +543,7 @@ def test_execution_record_to_dict():
 
 
 def test_register_phase(tmp_repo, output_dir, config, mock_llm):
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=mock_llm,
         issue_url="https://github.com/test/repo/issues/1",
@@ -652,7 +652,7 @@ class TestIterationCapEnforcement:
     async def test_iteration_cap_exact_boundary(self, tmp_repo, output_dir, mock_llm):
         """When cap equals number of phases, all phases run and loop succeeds."""
         cfg = EngineConfig(loop=LoopConfig(max_iterations=5))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -669,7 +669,7 @@ class TestIterationCapEnforcement:
     async def test_iteration_cap_one(self, tmp_repo, output_dir, mock_llm):
         """Cap=1 executes only the first phase, then escalates."""
         cfg = EngineConfig(loop=LoopConfig(max_iterations=1))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -703,7 +703,7 @@ class TestIterationCapEnforcement:
             next_p = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
             registry[name] = _make_stub(name, _success_result(name, next_p))
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -734,7 +734,7 @@ class TestIterationCapEnforcement:
                 next_phase="implement",
             ),
         )
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -755,7 +755,7 @@ class TestIterationCapEnforcement:
     async def test_iteration_count_monotonically_increases(self, tmp_repo, output_dir, mock_llm):
         """Iteration numbers in execution record always increase by 1."""
         cfg = EngineConfig(loop=LoopConfig(max_iterations=10))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -772,7 +772,7 @@ class TestIterationCapEnforcement:
     async def test_iteration_cap_zero_immediately_escalates(self, tmp_repo, output_dir, mock_llm):
         """Cap=0 means no iterations are executed — immediately escalated."""
         cfg = EngineConfig(loop=LoopConfig(max_iterations=0))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -799,7 +799,7 @@ class TestTimeBudgetEnforcement:
     async def test_time_budget_zero_immediately_times_out(self, tmp_repo, output_dir, mock_llm):
         """Budget=0 means the very first check finds time exceeded."""
         cfg = EngineConfig(loop=LoopConfig(time_budget_minutes=0))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -823,7 +823,7 @@ class TestTimeBudgetEnforcement:
             call_count["n"] += 1
             return real_monotonic() + (call_count["n"] * 40)
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -846,7 +846,7 @@ class TestTimeBudgetEnforcement:
         cfg_time = EngineConfig(loop=LoopConfig(time_budget_minutes=0))
         cfg_iter = EngineConfig(loop=LoopConfig(max_iterations=0))
 
-        loop_time = RalphLoop(
+        loop_time = PipelineEngine(
             config=cfg_time,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -854,7 +854,7 @@ class TestTimeBudgetEnforcement:
             output_dir=str(output_dir),
             phase_registry=_all_success_registry(),
         )
-        loop_iter = RalphLoop(
+        loop_iter = PipelineEngine(
             config=cfg_iter,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -874,7 +874,7 @@ class TestTimeBudgetEnforcement:
     async def test_time_budget_escalation_records_context(self, tmp_repo, output_dir, mock_llm):
         """Time budget escalation produces a tracer action with timing info."""
         cfg = EngineConfig(loop=LoopConfig(time_budget_minutes=0))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -904,7 +904,7 @@ class TestTimeBudgetEnforcement:
                 return mono_base + 60
             return mono_base + 600
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -944,7 +944,7 @@ class TestEscalationBehavior:
                 escalation_reason=f"Test escalation from {phase_name}",
             ),
         )
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -962,7 +962,7 @@ class TestEscalationBehavior:
     async def test_escalation_action_record_structure(self, tmp_repo, output_dir, mock_llm):
         """Escalation action records contain all required context fields."""
         cfg = EngineConfig(loop=LoopConfig(max_iterations=2))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1000,7 +1000,7 @@ class TestEscalationBehavior:
                 escalation_reason="blocking issue found",
             ),
         )
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1020,7 +1020,7 @@ class TestEscalationBehavior:
     async def test_escalation_records_elapsed_minutes(self, tmp_repo, output_dir, mock_llm):
         """Elapsed minutes in escalation context is a non-negative float."""
         cfg = EngineConfig(loop=LoopConfig(max_iterations=1))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1041,7 +1041,7 @@ class TestEscalationBehavior:
         results: dict[str, str] = {}
 
         cfg_success = EngineConfig()
-        loop_s = RalphLoop(
+        loop_s = PipelineEngine(
             config=cfg_success,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1057,7 +1057,7 @@ class TestEscalationBehavior:
             "triage",
             PhaseResult(phase="triage", success=False, should_continue=False),
         )
-        loop_f = RalphLoop(
+        loop_f = PipelineEngine(
             config=cfg_failure,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1068,7 +1068,7 @@ class TestEscalationBehavior:
         results["failure"] = (await loop_f.run()).result["status"]
 
         cfg_escalated = EngineConfig(loop=LoopConfig(max_iterations=0))
-        loop_e = RalphLoop(
+        loop_e = PipelineEngine(
             config=cfg_escalated,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1079,7 +1079,7 @@ class TestEscalationBehavior:
         results["escalated"] = (await loop_e.run()).result["status"]
 
         cfg_timeout = EngineConfig(loop=LoopConfig(time_budget_minutes=0))
-        loop_t = RalphLoop(
+        loop_t = PipelineEngine(
             config=cfg_timeout,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1114,7 +1114,7 @@ class TestEscalationBehavior:
                 next_phase="implement",
             ),
         )
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1155,7 +1155,7 @@ class TestEscalationBehavior:
 
         registry = dict(_all_success_registry())
         registry["implement"] = _ExplodingPhase
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1176,7 +1176,7 @@ class TestEscalationBehavior:
     ):
         """Only one escalation action is recorded regardless of escalation source."""
         cfg = EngineConfig(loop=LoopConfig(max_iterations=1))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1195,7 +1195,7 @@ class TestEscalationBehavior:
     ):
         """Escalation result is persisted in the execution.json file."""
         cfg = EngineConfig(loop=LoopConfig(max_iterations=1))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1212,7 +1212,7 @@ class TestEscalationBehavior:
     async def test_escalation_status_written_to_status_txt(self, tmp_repo, output_dir, mock_llm):
         """Status.txt reflects the escalation status."""
         cfg = EngineConfig(loop=LoopConfig(max_iterations=1))
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1240,7 +1240,7 @@ class TestPhaseValidationIndependence:
         self, tmp_repo, output_dir, config, mock_llm, clear_spy_log
     ):
         """Every phase instantiation receives a distinct ToolExecutor instance."""
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1259,7 +1259,7 @@ class TestPhaseValidationIndependence:
         self, tmp_repo, output_dir, config, mock_llm, clear_spy_log
     ):
         """Triage phase receives exactly the TRIAGE_TOOLS set."""
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1277,7 +1277,7 @@ class TestPhaseValidationIndependence:
         self, tmp_repo, output_dir, config, mock_llm, clear_spy_log
     ):
         """Implement phase receives exactly the IMPLEMENT_TOOLS set."""
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1295,7 +1295,7 @@ class TestPhaseValidationIndependence:
         self, tmp_repo, output_dir, config, mock_llm, clear_spy_log
     ):
         """Review phase receives exactly the REVIEW_TOOLS set (read-only, no shell)."""
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1316,7 +1316,7 @@ class TestPhaseValidationIndependence:
         self, tmp_repo, output_dir, config, mock_llm, clear_spy_log
     ):
         """Validate phase receives exactly the VALIDATE_TOOLS set (no file_write)."""
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1336,7 +1336,7 @@ class TestPhaseValidationIndependence:
         self, tmp_repo, output_dir, config, mock_llm, clear_spy_log
     ):
         """Report phase receives exactly the REPORT_TOOLS set (minimal read-only)."""
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1354,7 +1354,7 @@ class TestPhaseValidationIndependence:
         self, tmp_repo, output_dir, config, mock_llm, clear_spy_log
     ):
         """Each phase receives all prior phase results, accumulating as loop progresses."""
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1375,7 +1375,7 @@ class TestPhaseValidationIndependence:
         self, tmp_repo, output_dir, config, mock_llm, clear_spy_log
     ):
         """Every phase receives an EngineConfig instance."""
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1486,7 +1486,7 @@ class TestRetryBackoff:
     def test_compute_backoff_delay_defaults(self):
         """Default config: 1s base, 4s max → 1, 2, 4, 4, 4..."""
         cfg = EngineConfig()
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=MockProvider(),
             issue_url="https://github.com/t/r/issues/1",
@@ -1506,7 +1506,7 @@ class TestRetryBackoff:
         cfg = EngineConfig(
             loop=LoopConfig(retry_backoff_base_seconds=0.5, retry_backoff_max_seconds=2.0)
         )
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=MockProvider(),
             issue_url="https://github.com/t/r/issues/1",
@@ -1524,7 +1524,7 @@ class TestRetryBackoff:
     def test_compute_backoff_delay_zero_retries(self):
         """Zero retries → base delay (exponent clamped to 0)."""
         cfg = EngineConfig()
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=MockProvider(),
             issue_url="https://github.com/t/r/issues/1",
@@ -1538,7 +1538,7 @@ class TestRetryBackoff:
         cfg = EngineConfig(
             loop=LoopConfig(retry_backoff_base_seconds=0.0, retry_backoff_max_seconds=0.0)
         )
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=MockProvider(),
             issue_url="https://github.com/t/r/issues/1",
@@ -1565,7 +1565,7 @@ class TestRetryBackoff:
             nxt = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
             registry[name] = _make_stub(name, _success_result(name, nxt))
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1598,7 +1598,7 @@ class TestRetryBackoff:
                 _success_result("review", "validate"),
             ],
         )
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1636,7 +1636,7 @@ class TestRetryBackoff:
             nxt = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
             registry[name] = _make_stub(name, _success_result(name, nxt))
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1668,7 +1668,7 @@ class TestRetryBackoff:
             nxt = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
             registry[name] = _make_stub(name, _success_result(name, nxt))
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1686,7 +1686,7 @@ class TestRetryBackoff:
     @pytest.mark.asyncio
     async def test_no_backoff_on_normal_progression(self, tmp_repo, output_dir, config, mock_llm):
         """No sleep when all phases succeed on first try."""
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1737,7 +1737,7 @@ class TestRetryBackoff:
                 _success_result("review", "validate"),
             ],
         )
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",
@@ -1772,7 +1772,7 @@ class TestRetryBackoff:
             nxt = PHASE_ORDER[i + 1] if i + 1 < len(PHASE_ORDER) else ""
             registry[name] = _make_stub(name, _success_result(name, nxt))
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=mock_llm,
             issue_url="https://github.com/test/repo/issues/1",

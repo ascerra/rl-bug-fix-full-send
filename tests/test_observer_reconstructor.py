@@ -202,7 +202,7 @@ def artifacts_dir(tmp_path: Path, exec_data: dict[str, Any]) -> Path:
             ]
         )
     )
-    (tmp_path / "progress.md").write_text("# Ralph Loop Progress\n- Started\n- Done\n")
+    (tmp_path / "progress.md").write_text("# RL Engine Progress\n- Started\n- Done\n")
     return tmp_path
 
 
@@ -305,7 +305,7 @@ class TestReconstructorLoadArtifacts:
 
         assert recon.execution_data.get("execution", {}).get("id") == "test-exec-001"
         assert len(recon.get_transcript_calls()) == 3
-        assert "Ralph Loop Progress" in recon.get_progress_text()
+        assert "RL Engine Progress" in recon.get_progress_text()
 
     def test_missing_files_handled_gracefully(self, tmp_path: Path):
         recon = ExecutionReconstructor()

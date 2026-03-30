@@ -11,7 +11,7 @@ import pytest
 
 from engine.config import EngineConfig
 from engine.integrations.llm import MockProvider
-from engine.loop import PHASE_ORDER, RalphLoop
+from engine.loop import PHASE_ORDER, PipelineEngine
 from engine.observability.logger import StructuredLogger
 from engine.phases.base import Phase, PhaseResult
 from engine.workflow.monitor import (
@@ -59,7 +59,7 @@ class TestWorkflowContext:
             repository="org/repo",
             run_id="12345",
             run_url="https://github.com/org/repo/actions/runs/12345",
-            job_name="run-ralph-loop",
+            job_name="run-engine",
         )
         d = ctx.to_dict()
         assert d["is_ci"] is True
@@ -134,22 +134,22 @@ class TestWorkflowMonitorInit:
             token="ghp_test",
             repository="org/repo",
             run_id="12345",
-            job_name="run-ralph-loop",
+            job_name="run-engine",
             actor="testbot",
             ref="refs/heads/main",
             sha="abc123",
-            workflow="ralph-loop.yml",
+            workflow="RL Bug Fix Engine",
             event_name="workflow_dispatch",
         )
         ctx = monitor.context
         assert ctx.is_ci is True
         assert ctx.repository == "org/repo"
         assert ctx.run_id == "12345"
-        assert ctx.job_name == "run-ralph-loop"
+        assert ctx.job_name == "run-engine"
         assert ctx.actor == "testbot"
         assert ctx.ref == "refs/heads/main"
         assert ctx.sha == "abc123"
-        assert ctx.workflow == "ralph-loop.yml"
+        assert ctx.workflow == "RL Bug Fix Engine"
         assert ctx.event_name == "workflow_dispatch"
 
 
@@ -200,13 +200,13 @@ class TestFromEnvironment:
             "GITHUB_TOKEN": "ghp_test",
             "GITHUB_REPOSITORY": "org/repo",
             "GITHUB_RUN_ID": "12345",
-            "GITHUB_JOB": "run-ralph-loop",
+            "GITHUB_JOB": "run-engine",
             "GITHUB_RUN_NUMBER": "7",
             "GITHUB_RUN_ATTEMPT": "1",
             "GITHUB_ACTOR": "testbot",
             "GITHUB_REF": "refs/heads/main",
             "GITHUB_SHA": "abc123",
-            "GITHUB_WORKFLOW": "Ralph Loop",
+            "GITHUB_WORKFLOW": "RL Bug Fix Engine",
             "GITHUB_EVENT_NAME": "workflow_dispatch",
             "GITHUB_SERVER_URL": "https://github.com",
         }
@@ -215,7 +215,7 @@ class TestFromEnvironment:
             assert monitor is not None
             assert monitor._repository == "org/repo"
             assert monitor._run_id == "12345"
-            assert monitor._job_name == "run-ralph-loop"
+            assert monitor._job_name == "run-engine"
             assert monitor._actor == "testbot"
 
     def test_creates_from_gh_pat(self):
@@ -295,7 +295,7 @@ class TestGetJobs:
                 "jobs": [
                     {
                         "id": 999,
-                        "name": "Execute Ralph Loop",
+                        "name": "Execute RL Engine",
                         "status": "in_progress",
                         "steps": [
                             {"name": "Checkout", "number": 1, "conclusion": "success"},
@@ -308,7 +308,7 @@ class TestGetJobs:
         monitor._api_get = AsyncMock(return_value=mock_response)
         jobs = await monitor.get_jobs()
         assert len(jobs) == 1
-        assert jobs[0]["name"] == "Execute Ralph Loop"
+        assert jobs[0]["name"] == "Execute RL Engine"
 
     @pytest.mark.asyncio
     async def test_returns_empty_on_failure(self):
@@ -581,7 +581,7 @@ class TestLoopWithMonitor:
             )
         )
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/test/repo/issues/1",
@@ -598,7 +598,7 @@ class TestLoopWithMonitor:
 
     @pytest.mark.asyncio
     async def test_loop_without_monitor_no_workflow_context(self, tmp_repo, output_dir):
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/test/repo/issues/1",
@@ -617,7 +617,7 @@ class TestLoopWithMonitor:
             return_value=HealthCheck(healthy=True, run_status="in_progress")
         )
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/test/repo/issues/1",
@@ -643,7 +643,7 @@ class TestLoopWithMonitor:
             )
         )
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/test/repo/issues/1",
@@ -665,7 +665,7 @@ class TestLoopWithMonitor:
         monitor = _make_monitor()
         monitor.check_health = AsyncMock(side_effect=Exception("API unreachable"))
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/test/repo/issues/1",
@@ -685,7 +685,7 @@ class TestLoopWithMonitor:
             return_value=HealthCheck(healthy=True, run_status="in_progress")
         )
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/test/repo/issues/1",

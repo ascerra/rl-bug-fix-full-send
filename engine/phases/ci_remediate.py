@@ -29,7 +29,7 @@ class CIRemediatePhase(Phase):
     for pushing.  Receives CI failure details via ``issue_data`` keys
     injected by the loop's CI monitoring sub-loop.
 
-    Expected ``issue_data`` keys (set by ``RalphLoop._run_ci_monitoring_loop``):
+    Expected ``issue_data`` keys (set by ``PipelineEngine._run_ci_monitoring_loop``):
       - ``url``: original issue URL
       - ``ci_failure_details``: ``FailureDetails.to_dict()`` from ``CIMonitor``
       - ``ci_failure_category``: ``CIFailureCategory`` string value

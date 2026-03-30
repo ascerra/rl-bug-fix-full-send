@@ -305,11 +305,11 @@ def _suggest_fix(code: str) -> str:
             "or ensure ToolExecutor traces actions."
         ),
         "GP003": "Wrap untrusted content with _wrap_untrusted_content() before passing to LLM.",
-        "GP005": "Ensure RalphLoop.run() checks both max_iterations and time_budget.",
+        "GP005": "Ensure PipelineEngine.run() checks both max_iterations and time_budget.",
         "GP008": (
             "Pair every self.llm.complete() call with self.tracer.record_llm_call() for provenance."
         ),
-        "GP009": "Wire report generation into RalphLoop._write_outputs().",
+        "GP009": "Wire report generation into PipelineEngine._write_outputs().",
         "GP010": "Reference self.config in phase implementations instead of hardcoding values.",
     }
     return suggestions.get(code, "Review the golden principles in SPEC.md §7.")
@@ -439,7 +439,7 @@ def parse_args(argv: list[str] | None = None) -> tuple[Path, Path | None, Path |
 
     parser = argparse.ArgumentParser(
         prog="quality-scanner",
-        description="Background quality scanner for the Ralph Loop engine",
+        description="Background quality scanner for the RL Bug Fix engine",
     )
     parser.add_argument(
         "engine_path",

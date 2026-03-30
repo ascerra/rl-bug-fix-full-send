@@ -616,15 +616,15 @@ async def test_execute_artifacts_populated(tmp_path):
 
 @pytest.mark.asyncio
 async def test_triage_phase_in_loop(tmp_path):
-    """TriagePhase can be registered in RalphLoop and executed."""
-    from engine.loop import RalphLoop
+    """TriagePhase can be registered in PipelineEngine and executed."""
+    from engine.loop import PipelineEngine
 
     repo = tmp_path / "repo"
     repo.mkdir()
     out = tmp_path / "output"
     out.mkdir()
 
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=EngineConfig(),
         llm=MockProvider(responses=[_bug_response()]),
         issue_url="https://github.com/test/repo/issues/1",
@@ -1370,8 +1370,8 @@ class TestObserveIssueFetch:
 
     @pytest.mark.asyncio
     async def test_loop_passes_url_only_issue_data(self):
-        """RalphLoop passes URL-only issue_data, which triggers _fetch_issue in triage."""
-        from engine.loop import RalphLoop
+        """RL Engine passes URL-only issue_data, which triggers _fetch_issue in triage."""
+        from engine.loop import PipelineEngine
 
         phase_issue_data_captured: list[dict] = []
 
@@ -1380,7 +1380,7 @@ class TestObserveIssueFetch:
                 phase_issue_data_captured.append(dict(self_inner.issue_data))
                 return await super().observe()
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(responses=[_bug_response()]),
             issue_url="https://github.com/org/repo/issues/99",

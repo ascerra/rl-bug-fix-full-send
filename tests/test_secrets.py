@@ -471,7 +471,7 @@ class TestCLISecretValidation:
 
         with (
             patch("engine.__main__.create_provider") as mock_create,
-            patch("engine.__main__.RalphLoop") as mock_loop_cls,
+            patch("engine.__main__.PipelineEngine") as mock_loop_cls,
         ):
             from engine.integrations.llm import MockProvider
 
@@ -534,7 +534,7 @@ class TestCLISecretValidation:
 
         with (
             patch("engine.__main__.create_provider") as mock_create,
-            patch("engine.__main__.RalphLoop") as mock_loop_cls,
+            patch("engine.__main__.PipelineEngine") as mock_loop_cls,
         ):
             from engine.integrations.llm import MockProvider
 
@@ -578,10 +578,10 @@ class TestLoopRedactorWiring:
     def test_loop_creates_logger_with_redactor(self):
         from engine.config import EngineConfig
         from engine.integrations.llm import MockProvider
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
 
         r = SecretRedactor({"KEY": "val"})
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/org/repo/issues/1",
@@ -593,10 +593,10 @@ class TestLoopRedactorWiring:
     def test_loop_creates_tracer_with_redactor(self):
         from engine.config import EngineConfig
         from engine.integrations.llm import MockProvider
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
 
         r = SecretRedactor({"KEY": "val"})
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/org/repo/issues/1",
@@ -608,9 +608,9 @@ class TestLoopRedactorWiring:
     def test_loop_without_redactor(self):
         from engine.config import EngineConfig
         from engine.integrations.llm import MockProvider
-        from engine.loop import RalphLoop
+        from engine.loop import PipelineEngine
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/org/repo/issues/1",

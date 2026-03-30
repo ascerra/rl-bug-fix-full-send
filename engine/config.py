@@ -46,6 +46,7 @@ class ReportingConfig:
     comparison_mode: bool = False
     publish_to_pages: bool = False
     artifact_retention_days: int = 30
+    engine_repo_url: str = "https://github.com/ascerra/rl-bug-fix-full-send"
 
 
 @dataclass
@@ -225,8 +226,9 @@ def _apply_raw_config(config: EngineConfig, raw: dict[str, Any]) -> EngineConfig
         for k, v in raw["llm"].items():
             if hasattr(config.llm, k):
                 setattr(config.llm, k, v)
-    if "ralph_loop" in raw:
-        for k, v in raw["ralph_loop"].items():
+    loop_section = raw.get("loop") or raw.get("ralph_loop")
+    if loop_section:
+        for k, v in loop_section.items():
             if hasattr(config.loop, k):
                 setattr(config.loop, k, v)
     if "security" in raw:

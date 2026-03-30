@@ -11,7 +11,7 @@ import yaml
 
 from engine.config import load_config
 from engine.integrations.llm import create_provider
-from engine.loop import RalphLoop
+from engine.loop import PipelineEngine
 from engine.phases.ci_remediate import CIRemediatePhase
 from engine.phases.implement import ImplementPhase
 from engine.phases.report import ReportPhase
@@ -93,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
 
     monitor = WorkflowMonitor.from_environment()
 
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=config,
         llm=provider,
         issue_url=args.issue_url,
@@ -114,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
 
     status = execution.result.get("status", "unknown")
     iterations = execution.result.get("total_iterations", 0)
-    print(f"\nRalph Loop complete: status={status}, iterations={iterations}")
+    print(f"\nRL Engine complete: status={status}, iterations={iterations}")
     print(f"Output: {args.output_dir}/execution.json")
 
     return 0 if status == "success" else 1

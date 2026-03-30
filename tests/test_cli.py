@@ -40,7 +40,13 @@ class TestParseConfigOverride:
         result = parse_config_override(override)
         assert result["phases"]["triage"]["enabled"] is False
 
-    def test_valid_yaml_loop_config(self):
+    def test_valid_yaml_loop_config_primary_key(self):
+        override = "{loop: {max_iterations: 5, time_budget_minutes: 15}}"
+        result = parse_config_override(override)
+        assert result["loop"]["max_iterations"] == 5
+        assert result["loop"]["time_budget_minutes"] == 15
+
+    def test_valid_yaml_loop_config_ralph_loop_backward_compat(self):
         override = "{ralph_loop: {max_iterations: 5, time_budget_minutes: 15}}"
         result = parse_config_override(override)
         assert result["ralph_loop"]["max_iterations"] == 5
@@ -155,9 +161,9 @@ class TestBuildOverrides:
         assert result == {"llm": {"provider": "anthropic"}}
 
     def test_config_override_only(self):
-        args = self._make_args(config_override="{ralph_loop: {max_iterations: 3}}")
+        args = self._make_args(config_override="{loop: {max_iterations: 3}}")
         result = build_overrides(args)
-        assert result == {"ralph_loop": {"max_iterations": 3}}
+        assert result == {"loop": {"max_iterations": 3}}
 
     def test_provider_overrides_config_override_llm(self):
         """--provider flag takes precedence over llm.provider in --config-override."""
@@ -173,12 +179,12 @@ class TestBuildOverrides:
     def test_config_override_and_provider_merge(self):
         args = self._make_args(
             provider="gemini",
-            config_override="{ralph_loop: {max_iterations: 5}}",
+            config_override="{loop: {max_iterations: 5}}",
         )
         result = build_overrides(args)
         assert result is not None
         assert result["llm"]["provider"] == "gemini"
-        assert result["ralph_loop"]["max_iterations"] == 5
+        assert result["loop"]["max_iterations"] == 5
 
     def test_invalid_config_override_with_provider(self):
         args = self._make_args(provider="gemini", config_override="not valid yaml: [}")
@@ -215,7 +221,7 @@ def _async_return(value):
 # ------------------------------------------------------------------
 # main() integration tests
 #
-# We mock RalphLoop to avoid running real phases with MockProvider
+# We mock PipelineEngine to avoid running real phases with MockProvider
 # (MockProvider's canned responses cause triage escalation).
 # This isolates CLI wiring from phase behavior.
 # ------------------------------------------------------------------
@@ -229,7 +235,7 @@ class TestMain:
 
         with (
             patch("engine.__main__.create_provider") as mock_create,
-            patch("engine.__main__.RalphLoop") as mock_loop_cls,
+            patch("engine.__main__.PipelineEngine") as mock_loop_cls,
         ):
             from engine.integrations.llm import MockProvider
 
@@ -265,7 +271,7 @@ class TestMain:
 
         with (
             patch("engine.__main__.create_provider") as mock_create,
-            patch("engine.__main__.RalphLoop") as mock_loop_cls,
+            patch("engine.__main__.PipelineEngine") as mock_loop_cls,
             patch("engine.__main__.load_config") as mock_load,
         ):
             from engine.integrations.llm import MockProvider
@@ -287,7 +293,7 @@ class TestMain:
                     "--provider",
                     "mock",
                     "--config-override",
-                    "{ralph_loop: {max_iterations: 20}}",
+                    "{loop: {max_iterations: 20}}",
                 ]
             )
 
@@ -295,7 +301,7 @@ class TestMain:
         load_kwargs = mock_load.call_args[1]
         overrides = load_kwargs.get("overrides")
         assert overrides is not None
-        assert overrides["ralph_loop"]["max_iterations"] == 20
+        assert overrides["loop"]["max_iterations"] == 20
         assert overrides["llm"]["provider"] == "mock"
 
     def test_main_with_config_file(self, tmp_path):
@@ -307,7 +313,7 @@ class TestMain:
 
         with (
             patch("engine.__main__.create_provider") as mock_create,
-            patch("engine.__main__.RalphLoop") as mock_loop_cls,
+            patch("engine.__main__.PipelineEngine") as mock_loop_cls,
             patch("engine.__main__.load_config") as mock_load,
         ):
             from engine.integrations.llm import MockProvider
@@ -344,7 +350,7 @@ class TestMain:
 
         with (
             patch("engine.__main__.create_provider") as mock_create,
-            patch("engine.__main__.RalphLoop") as mock_loop_cls,
+            patch("engine.__main__.PipelineEngine") as mock_loop_cls,
         ):
             from engine.integrations.llm import MockProvider
 
@@ -379,7 +385,7 @@ class TestMain:
 
         with (
             patch("engine.__main__.create_provider") as mock_create,
-            patch("engine.__main__.RalphLoop") as mock_loop_cls,
+            patch("engine.__main__.PipelineEngine") as mock_loop_cls,
         ):
             from engine.integrations.llm import MockProvider
 
@@ -411,7 +417,7 @@ class TestMain:
 
         with (
             patch("engine.__main__.create_provider") as mock_create,
-            patch("engine.__main__.RalphLoop") as mock_loop_cls,
+            patch("engine.__main__.PipelineEngine") as mock_loop_cls,
         ):
             from engine.integrations.llm import MockProvider
 
@@ -445,7 +451,13 @@ class TestMain:
 
 
 class TestConfigOverrideIntegration:
-    def test_override_changes_loop_config(self):
+    def test_override_changes_loop_config_primary_key(self):
+        from engine.config import load_config
+
+        config = load_config(overrides={"loop": {"max_iterations": 3}})
+        assert config.loop.max_iterations == 3
+
+    def test_override_changes_loop_config_ralph_loop_backward_compat(self):
         from engine.config import load_config
 
         config = load_config(overrides={"ralph_loop": {"max_iterations": 3}})
@@ -470,7 +482,7 @@ class TestConfigOverrideIntegration:
     def test_override_from_yaml_string(self):
         from engine.config import load_config
 
-        yaml_str = "{ralph_loop: {max_iterations: 7}, llm: {temperature: 0.9}}"
+        yaml_str = "{loop: {max_iterations: 7}, llm: {temperature: 0.9}}"
         overrides = parse_config_override(yaml_str)
         config = load_config(overrides=overrides)
         assert config.loop.max_iterations == 7
@@ -481,7 +493,7 @@ class TestConfigOverrideIntegration:
 
         config_file = tmp_path / "config.yaml"
         config_file.write_text(
-            "llm:\n  provider: gemini\n  temperature: 0.1\nralph_loop:\n  max_iterations: 15\n"
+            "llm:\n  provider: gemini\n  temperature: 0.1\nloop:\n  max_iterations: 15\n"
         )
 
         config = load_config(

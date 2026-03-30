@@ -368,7 +368,7 @@ def build_artifact_manifest(
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="report-publisher",
-        description="Publish Ralph Loop execution reports",
+        description="Publish RL Engine execution reports",
     )
     parser.add_argument("--execution-log", required=True, help="Path to execution.json")
     parser.add_argument("--output-dir", required=True, help="Directory to write reports to")

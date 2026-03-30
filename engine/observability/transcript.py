@@ -28,7 +28,7 @@ _HTML_HEADER = """\
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Ralph Loop — LLM Transcript</title>
+<title>RL Engine — LLM Transcript</title>
 <style>
   :root {
     --bg: #0d1117; --surface: #161b22; --border: #30363d;
@@ -99,7 +99,7 @@ _HTML_HEADER = """\
 </head>
 <body>
 <h1>LLM Transcript</h1>
-<div class="subtitle">Ralph Loop — live inference log</div>
+<div class="subtitle">RL Engine — live inference log</div>
 <div id="calls">
 """
 

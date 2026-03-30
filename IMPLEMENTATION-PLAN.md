@@ -95,7 +95,7 @@ Phased build plan. Each phase produces usable, testable output. Phases are desig
 ## Phase 2: GitHub Actions Integration
 
 ### 2.1 Main Workflow ✅
-- `.github/workflows/ralph-loop.yml`
+- `.github/workflows/rl-engine.yml`
 - Triggered by `workflow_dispatch` with `issue_url` input
 - Sets up Python environment
 - Clones target repo
@@ -174,7 +174,7 @@ Phased build plan. Each phase produces usable, testable output. Phases are desig
 - `publish()` generates report.html, summary.md, artifact-manifest.json to output directory
 - `build_summary_markdown()` produces metrics summary for GitHub Actions step summary
 - `build_artifact_manifest()` produces JSON manifest of generated files with config snapshot
-- Integrated into `RalphLoop._write_outputs()` — reports generated automatically as byproduct of execution
+- Integrated into `PipelineEngine._write_outputs()` — reports generated automatically as byproduct of execution
 - Upload as GitHub Actions artifacts (workflow steps for execution + reports artifacts)
 - Optional GitHub Pages deployment via `publish-to-pages` job gated by `publish_to_pages` config flag
 - 45 tests covering publisher, summary, manifest, CLI, error handling, and loop integration
@@ -314,7 +314,7 @@ Phased build plan. Each phase produces usable, testable output. Phases are desig
 
 ### Meta Loop Runner Script ✅
 - `scripts/meta-loop.sh` — production meta loop CI runner
-- Triggers `ralph-loop.yml` via `gh workflow run`, monitors with polling, downloads artifacts, analyzes `execution.json`
+- Triggers `rl-engine.yml` via `gh workflow run`, monitors with polling, downloads artifacts, analyzes `execution.json`
 - Review analysis: extracts verdicts, findings, rejection counts, escalation reasons
 - Continuous mode (`--continuous`): trigger → wait → analyze → repeat until success or max runs
 - Supports `--fork-repo`, `--provider`, `--config` overrides
@@ -368,7 +368,7 @@ Phased build plan. Each phase produces usable, testable output. Phases are desig
 ## Production Hardening (post-build fixes from live runs)
 
 ### Cross-Fork PR Workflow ✅
-- Added `fork_repo` workflow input to `ralph-loop.yml`
+- Added `fork_repo` workflow input to `rl-engine.yml`
 - `git remote set-url --push origin` redirects pushes to the user's fork
 - `validate.py` creates `rl/fix` branch, pushes to fork, constructs `fork_owner:branch` head for cross-fork PR
 - Tests: bare-repo git helpers, cross-fork `head` assertion
@@ -408,7 +408,7 @@ Deficiency catalog from 4 production runs (workflow runs `23555432272`, `2355560
 #### 7.2 Metrics Counters Disconnected from Tracer (D2) ✅
 - **Evidence**: Run 4 `execution.json` shows `total_llm_calls: 0, total_tokens_in: 0, total_tokens_out: 0` despite 7 actual LLM calls visible in the `actions` array
 - **Root cause**: All phases call `self.tracer.record_llm_call()` but none call `self.metrics.record_llm_call()`. `LoopMetrics.record_llm_call()` exists but is never invoked.
-- **Fix**: Added `record_llm_call()` helper on base `Phase` class that calls both `tracer.record_llm_call()` and `metrics.record_llm_call()` in one call. Wired `LoopMetrics` from `RalphLoop` into phase instantiation. Updated all 4 phase files + golden principles checker. 11 new tests covering helper method, all phases, and e2e metrics verification.
+- **Fix**: Added `record_llm_call()` helper on base `Phase` class that calls both `tracer.record_llm_call()` and `metrics.record_llm_call()` in one call. Wired `LoopMetrics` from `PipelineEngine` into phase instantiation. Updated all 4 phase files + golden principles checker. 11 new tests covering helper method, all phases, and e2e metrics verification.
 
 ### HIGH — Engine Runs But Produces Wrong Fixes
 
@@ -464,9 +464,9 @@ Deficiency catalog from 4 production runs (workflow runs `23555432272`, `2355560
 - **Evidence**: User sees only `[phase=implement iter=2]` debug lines in GitHub Actions logs. No human-readable sentences explaining what the engine is doing.
 - **Fix** (five parts — logger, loop, phases, progress file, tests):
   1. Added `narrate()` method to `engine/observability/logger.py` — writes `>>> [PHASE] message` to stderr (visible in live GH Actions log), stores in `_narrations` list, and appends to `output/progress.md` running markdown file. Added `write_progress_heading()` for section headers. Added `progress_path` parameter to `StructuredLogger.__init__()`. Redaction applied via the existing `SecretRedactor`.
-  2. Wired `progress_path` into `RalphLoop.__init__()`. Loop narrates at: start (issue URL, config), each iteration start (phase name, iteration number), phase result (succeeded/failed, duration, elapsed time), escalation events, time budget/iteration cap, phase transitions, review rejection cap, retryable failures, and loop completion (status, total time).
+  2. Wired `progress_path` into `PipelineEngine.__init__()`. Loop narrates at: start (issue URL, config), each iteration start (phase name, iteration number), phase result (succeeded/failed, duration, elapsed time), escalation events, time budget/iteration cap, phase transitions, review rejection cap, retryable failures, and loop completion (status, total time).
   3. All 4 phases emit narration at each OODA step: observe (what context was gathered), plan (LLM result summary), act (what was done), validate (issues found), reflect (decision and next step). Each narration is a 1–2 sentence human-readable summary.
-  4. `output/progress.md` is a running markdown file with `# Ralph Loop Progress` heading, per-iteration `## Iteration N — phase` headings, and bullet-point narrations. Continuously appended during execution.
+  4. `output/progress.md` is a running markdown file with `# RL Engine Progress` heading, per-iteration `## Iteration N — phase` headings, and bullet-point narrations. Continuously appended during execution.
   5. 34 new tests covering: narrate core (stderr, list, progress.md, parent dir creation, no-path, multi-phase, copy), redaction (stderr, list, file), write_progress_heading, loop narration (start, phase, result, completion, escalation, iteration cap, progress.md, headings), per-phase narration (triage observe/plan/reflect, implement observe/plan, review observe/plan, validate observe/plan), and full-run progress.md structure.
 
 #### 7.9 report.html Lacks Narrative (D9) ✅
@@ -474,8 +474,8 @@ Deficiency catalog from 4 production runs (workflow runs `23555432272`, `2355560
 - **Fix**: Added `build_narrative()` in `engine/visualization/publisher.py` — deterministic, template-based plain-English paragraph from execution data (no LLM call). Covers issue identification, triage classification + confidence, implementation attempt count + success/failure, review verdict, and final status. Added `narrative` field to `ReportData` in `report_generator.py`. Inserted narrative as the first section in `report.html` (before metrics cards) with accent-colored left border. Added narrative as opening paragraph of `summary.md`. 24 new tests covering all narrative paths (status variants, phase combinations, edge cases) plus integration with summary.md, report.html, and ReportData.
 
 #### 7.10 Artifact Completeness — log.json and progress.md Not Uploaded (D10) ✅
-- **Evidence**: `./output/log.json` is written by `StructuredLogger` and `./output/progress.md` will be written by the narrator (7.8), but the artifact upload in `ralph-loop.yml` only captures `execution.json`, `reports/`, `transcripts/`, and `status.txt`.
-- **Fix**: Added `./output/log.json` and `./output/progress.md` to the `path` list in the "Upload execution artifacts" step of `.github/workflows/ralph-loop.yml`. 5 new tests verify: workflow YAML lists all expected artifact paths, loop run produces `log.json` and `progress.md`, all core outputs exist after a run, and retention days match config.
+- **Evidence**: `./output/log.json` is written by `StructuredLogger` and `./output/progress.md` will be written by the narrator (7.8), but the artifact upload in `rl-engine.yml` only captures `execution.json`, `reports/`, `transcripts/`, and `status.txt`.
+- **Fix**: Added `./output/log.json` and `./output/progress.md` to the `path` list in the "Upload execution artifacts" step of `.github/workflows/rl-engine.yml`. 5 new tests verify: workflow YAML lists all expected artifact paths, loop run produces `log.json` and `progress.md`, all core outputs exist after a run, and retention days match config.
 
 #### 7.11 summary.md Shows Raw JSON (D11) ✅
 - **Evidence**: Iteration trace in `$GITHUB_STEP_SUMMARY` dumps truncated JSON for findings (e.g., `impl_plan: {'root_cause': 'unknown'...`).
@@ -635,11 +635,11 @@ See SPEC.md §2.2 NFR-5, §4.3, and §5.6 for full requirements.
 - `engine/observer/__main__.py` — `run_observer()` function wires the full pipeline: reconstruct → cross-check → build attestation → sign → evaluate policy → write outputs (attestation.json, policy-result.json, pr-comment.md, summary.txt, signing-metadata.json)
   - `main()` CLI entry point with exit codes: 0 = policy passed, 1 = policy failed (when `fail_on_policy_violation: true`), 2 = observer error
   - `_extract_triage_components()` and `_extract_issue_body()` helpers for scope compliance rule
-- Workflow changes to `.github/workflows/ralph-loop.yml`:
-  - New `observer` job with `needs: run-ralph-loop`, `if: always()`
+- Workflow changes to `.github/workflows/rl-engine.yml`:
+  - New `observer` job with `needs: run-engine`, `if: always()`
   - `permissions: { id-token: write, contents: read, pull-requests: write }`
   - Installs cosign via `sigstore/cosign-installer@v3`
-  - Downloads `ralph-loop-execution-*` artifact from agent job
+  - Downloads `rl-engine-execution-*` artifact from agent job
   - Runs `python -m engine.observer` with `--artifacts-dir`, `--templates-dir`, `--output-dir`, `--branch-dir`, `--config`
   - Uploads `observer-attestation-*` as a new artifact
   - Posts policy result as PR comment when PR number is available
@@ -793,6 +793,11 @@ Replaces the existing D3.js 2D decision tree and action map with a full Three.js
 
 **Deliverable**: Self-contained 3D HTML report generated as a byproduct of every execution. Legacy 2D mode preserved.
 
+### 9.7 Agent Sidebar Navigation ✅
+- `engine/visualization/report_generator.py` — `_build_agents_data()` extracts per-agent metadata (name, description, icon, source file path, prompt file path, allowed tools, status, timing, iteration count, LLM calls) from `phases_summary` and `iterations`. `_AGENT_DESCRIPTIONS` and `_AGENT_ICONS` constants provide human-readable descriptions and emoji icons for each phase agent. `ReportData.agents` field added. `engine_repo_url` passed to template context from `ReportingConfig`.
+- `engine/config.py` — `ReportingConfig.engine_repo_url` field (default: `https://github.com/ascerra/rl-bug-fix-full-send`) used to construct GitHub links to agent source files.
+- `templates/visual-report/report.html` — fixed left sidebar (`nav.agent-sidebar`) listing all phase agents with status indicators (success/failure dot), timing, iteration count, LLM call count, and GitHub source links. Scroll-tracking JS highlights the active agent as user scrolls. Section navigation links (Phase Summary, Decision Tree, Action Map, Timeline, LLM Log, Actions Log). Mobile-responsive: sidebar slides in/out via hamburger toggle on screens ≤1100px. Body layout restructured with `.main-content` wrapper offset by sidebar width. Section heading IDs added for scroll-to navigation.
+
 ### Phase 9 Build Order
 
 | Item | Effort | Depends on | Priority |
@@ -803,6 +808,7 @@ Replaces the existing D3.js 2D decision tree and action map with a full Three.js
 | 9.4 Detail drill-down panels ✅ | 2 sessions | 9.1 + 9.2 | Critical |
 | 9.5 Narrative summary landing ✅ | 1 session | 9.4 | High |
 | 9.6 Report assembly ✅ | 1 session | 9.1-9.5 | Critical |
+| 9.7 Agent sidebar navigation ✅ | 0.5 session | 9.6 | Medium |
 
 ## Phase 10: Implement-First Workflow Execution and CI Remediation
 

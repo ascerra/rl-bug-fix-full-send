@@ -1,12 +1,12 @@
 """End-to-end tests — full pipeline against simulated known-solved bugs.
 
-Phase 5.3: Tests the entire Ralph Loop pipeline from issue through to PR attempt,
+Phase 5.3: Tests the entire RL Engine pipeline from issue through to PR attempt,
 using MockProvider with realistic phase responses. Simulates three Konflux-style
 bugs: nil pointer in Go controller, Python import error, YAML config parsing error.
 
 Each test creates a real git repo, configures MockProvider with phase-specific
 JSON responses, registers all real phase implementations, and runs the full
-RalphLoop end-to-end. Tests verify: all phases run in order, execution record
+PipelineEngine end-to-end. Tests verify: all phases run in order, execution record
 is complete, metrics are populated, reports are generated, comparison mode works,
 and execution completes within time budget.
 """
@@ -26,7 +26,7 @@ import pytest
 
 from engine.config import EngineConfig, LoopConfig
 from engine.integrations.llm import MockProvider
-from engine.loop import PHASE_ORDER, RalphLoop
+from engine.loop import PHASE_ORDER, PipelineEngine
 from engine.phases.implement import ImplementPhase
 from engine.phases.review import ReviewPhase
 from engine.phases.triage import TriagePhase
@@ -403,10 +403,10 @@ def _make_loop(
     *,
     config: EngineConfig | None = None,
     comparison_ref: str = "",
-) -> RalphLoop:
-    """Create a fully-wired RalphLoop with real phases and MockProvider."""
+) -> PipelineEngine:
+    """Create a fully-wired PipelineEngine with real phases and MockProvider."""
     cfg = config or _make_config()
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=cfg,
         llm=MockProvider(responses=_mock_responses(bug)),
         issue_url=bug["issue_url"],
@@ -979,7 +979,7 @@ class TestEndToEndRobustness:
         cfg = _make_config()
         cfg.loop.max_iterations = 15
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=cfg,
             llm=MockProvider(responses=responses),
             issue_url=bug["issue_url"],

@@ -22,7 +22,7 @@ import pytest
 from engine.config import EngineConfig, SecurityConfig
 from engine.integrations.github import GitHubAdapter
 from engine.integrations.llm import LLMResponse, MockProvider
-from engine.loop import RalphLoop
+from engine.loop import PipelineEngine
 from engine.observability.logger import StructuredLogger
 from engine.observability.metrics import LoopMetrics
 from engine.observability.tracer import Tracer
@@ -420,7 +420,7 @@ class TestProvenanceRecording:
         provider = MockProvider(
             responses=[_TRIAGE_JSON, _IMPLEMENT_JSON, _REVIEW_APPROVE_JSON, _VALIDATE_READY_JSON]
         )
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=provider,
             issue_url="https://github.com/o/r/issues/1",
@@ -562,7 +562,7 @@ class TestNoSecretsInLogs:
         provider = MockProvider(responses=[_TRIAGE_JSON])
         config.loop.max_iterations = 2
 
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=provider,
             issue_url="https://github.com/o/r/issues/1",
@@ -610,7 +610,7 @@ class TestNoSecretsInLogs:
 
     def test_loop_wires_redactor_to_logger_and_tracer(self):
         r = self._make_redactor()
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=EngineConfig(),
             llm=MockProvider(),
             issue_url="https://github.com/o/r/issues/1",

@@ -250,7 +250,7 @@ class GoldenPrinciplesChecker:
                 )
 
     def _check_iteration_bounds(self) -> None:
-        """P5: RalphLoop.run() must check max_iterations and time_budget."""
+        """P5: PipelineEngine.run() must check max_iterations and time_budget."""
         loop_path = self.engine_path / "loop.py"
         if not loop_path.is_file():
             return
@@ -264,7 +264,7 @@ class GoldenPrinciplesChecker:
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            if node.name != "RalphLoop":
+            if node.name != "PipelineEngine":
                 continue
 
             run_method = _find_method(node, "run")
@@ -281,7 +281,7 @@ class GoldenPrinciplesChecker:
                         line=run_method.lineno,
                         principle="P5: Iterations are bounded",
                         code="GP005",
-                        message="RalphLoop.run() does not check max_iterations",
+                        message="PipelineEngine.run() does not check max_iterations",
                     )
                 )
 
@@ -293,12 +293,12 @@ class GoldenPrinciplesChecker:
                         line=run_method.lineno,
                         principle="P5: Iterations are bounded",
                         code="GP005",
-                        message="RalphLoop.run() does not check time_budget",
+                        message="PipelineEngine.run() does not check time_budget",
                     )
                 )
 
     def _check_report_publishing(self) -> None:
-        """P9: RalphLoop._write_outputs() must trigger report generation."""
+        """P9: PipelineEngine._write_outputs() must trigger report generation."""
         loop_path = self.engine_path / "loop.py"
         if not loop_path.is_file():
             return
@@ -312,7 +312,7 @@ class GoldenPrinciplesChecker:
         for node in ast.walk(tree):
             if not isinstance(node, ast.ClassDef):
                 continue
-            if node.name != "RalphLoop":
+            if node.name != "PipelineEngine":
                 continue
 
             write_method = _find_method(node, "_write_outputs")
@@ -324,7 +324,7 @@ class GoldenPrinciplesChecker:
                         line=node.lineno,
                         principle="P9: Demos are a byproduct",
                         code="GP009",
-                        message="RalphLoop has no _write_outputs() method",
+                        message="PipelineEngine has no _write_outputs() method",
                     )
                 )
                 continue
@@ -339,7 +339,7 @@ class GoldenPrinciplesChecker:
                         principle="P9: Demos are a byproduct",
                         code="GP009",
                         message=(
-                            "RalphLoop._write_outputs() does not reference "
+                            "PipelineEngine._write_outputs() does not reference "
                             "report publishing — demos must be a byproduct"
                         ),
                     )

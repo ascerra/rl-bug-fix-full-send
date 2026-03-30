@@ -245,7 +245,7 @@ class AttestationBuilder:
 
         builder_id = ""
         if repo:
-            builder_id = f"{workflow_url}/{repo}/.github/workflows/ralph-loop.yml"
+            builder_id = f"{workflow_url}/{repo}/.github/workflows/rl-engine.yml"
 
         model_entries = []
         for m in models:

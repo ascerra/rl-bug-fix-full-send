@@ -35,7 +35,7 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 - LLM-friendly tool schemas exposed via `tool_schemas()` — ready for function-calling APIs (Gemini, Anthropic)
 - Output truncation at 100KB for file reads and shell output — prevents memory issues with large files
 **Issues hit**: None — clean implementation, all tests passed on first run after lint fixes
-**Next focus**: Phase 1.1 — Loop Orchestrator (wire ToolExecutor into RalphLoop, implement real phase dispatch)
+**Next focus**: Phase 1.1 — Loop Orchestrator (wire ToolExecutor into PipelineEngine, implement real phase dispatch)
 
 ## Run 3 — 2026-03-25
 
@@ -169,7 +169,7 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 - PR description generation delegated to LLM with full context (test results, lint results, diff, issue, review verdict) — follows the validate.md prompt template
 - Validate phase gets `file_read`, `file_search`, `shell_run`, `git_diff`, `github_api` tools — no `file_write` or `git_commit` (cannot modify code at this stage)
 **Issues hit**: Ruff format differences — fixed with `make fmt` before final check
-**Next focus**: Phase 2.1 — Main GitHub Actions Workflow (`.github/workflows/ralph-loop.yml` — workflow_dispatch trigger, Python setup, repo clone, engine execution, artifact upload)
+**Next focus**: Phase 2.1 — Main GitHub Actions Workflow (`.github/workflows/rl-engine.yml` — workflow_dispatch trigger, Python setup, repo clone, engine execution, artifact upload)
 
 ## Run 9 — 2026-03-25
 
@@ -177,7 +177,7 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 **What shipped**: Production-ready GitHub Actions workflow with inline YAML config overrides via `--config-override` CLI parameter, input validation, graceful handling of missing visualization module, improved artifact upload with structured step summary. CLI entry point enhanced with `parse_config_override()`, `build_overrides()` for merging flags and inline YAML. Full test coverage for CLI wiring.
 **Files changed**:
 - `engine/__main__.py` (enhanced — `parse_args` accepts `argv`, `parse_config_override` for inline YAML, `build_overrides` merges CLI flags + YAML overrides, `main` accepts `argv` for testability)
-- `.github/workflows/ralph-loop.yml` (rewritten — input validation, `--config-override` wired through, graceful report generation when visualization module absent, structured step summary with markdown table, `if-no-files-found` guards on artifact uploads)
+- `.github/workflows/rl-engine.yml` (rewritten — input validation, `--config-override` wired through, graceful report generation when visualization module absent, structured step summary with markdown table, `if-no-files-found` guards on artifact uploads)
 - `tests/test_cli.py` (new — 33 tests: `parse_config_override` (12 tests), `parse_args` (4 tests), `build_overrides` (6 tests), `main()` integration (6 tests), config override integration (5 tests))
 - `IMPLEMENTATION-PLAN.md` (marked Phase 2.1 ✅)
 - `README.md` (updated build status table, test count)
@@ -186,22 +186,22 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 - `parse_config_override` returns empty dict on invalid YAML (fail-safe) rather than crashing — the engine runs with defaults, prints a warning
 - `--provider` flag takes precedence over `llm.provider` in `--config-override` — explicit CLI flags win over inline YAML, matching standard CLI conventions
 - `main()` accepts optional `argv` parameter for testability — avoids patching `sys.argv` in tests
-- main() tests mock `RalphLoop` entirely rather than running real phases with `MockProvider` — isolates CLI wiring tests from phase behavior (MockProvider's canned responses trigger triage escalation)
+- main() tests mock `PipelineEngine` entirely rather than running real phases with `MockProvider` — isolates CLI wiring tests from phase behavior (MockProvider's canned responses trigger triage escalation)
 - Workflow report generation step uses `continue-on-error: true` and checks for module existence before attempting import — Phase 3 (visualization) not yet built, so the step must not block the workflow
 - Workflow input validation rejects malformed issue URLs early with `::error::` annotation
-**Issues hit**: Initial main() tests ran real phases with MockProvider causing triage escalation (exit code 1) — fixed by mocking RalphLoop to isolate CLI wiring from phase behavior. Ruff format differences fixed with `make fmt`.
+**Issues hit**: Initial main() tests ran real phases with MockProvider causing triage escalation (exit code 1) — fixed by mocking PipelineEngine to isolate CLI wiring from phase behavior. Ruff format differences fixed with `make fmt`.
 **Next focus**: Phase 2.2 — Self-Monitoring (workflow can check its own status via GitHub API, react to sub-step failures)
 
 ## Run 10 — 2026-03-25
 
 **Phase**: Phase 2.2 — Self-Monitoring
-**What shipped**: `WorkflowMonitor` class that auto-detects GitHub Actions environment, queries the current workflow run's status and step failures via the GitHub API, and feeds CI context into the loop's execution record and tracer. Integrated into `RalphLoop` (optional `workflow_monitor` parameter with per-iteration health checks) and CLI (auto-created via `from_environment()` when `GITHUB_ACTIONS=true`). Workflow YAML updated with timeout alignment comment and explicit `GH_PAT` env var passthrough.
+**What shipped**: `WorkflowMonitor` class that auto-detects GitHub Actions environment, queries the current workflow run's status and step failures via the GitHub API, and feeds CI context into the loop's execution record and tracer. Integrated into `PipelineEngine` (optional `workflow_monitor` parameter with per-iteration health checks) and CLI (auto-created via `from_environment()` when `GITHUB_ACTIONS=true`). Workflow YAML updated with timeout alignment comment and explicit `GH_PAT` env var passthrough.
 **Files changed**:
 - `engine/workflow/__init__.py` (new)
 - `engine/workflow/monitor.py` (new — `WorkflowMonitor`, `WorkflowContext`, `StepFailure`, `HealthCheck`, `recommended_workflow_timeout`)
 - `engine/loop.py` (updated — accepts `workflow_monitor`, health checks each iteration, records context in execution record)
 - `engine/__main__.py` (updated — auto-creates monitor from environment)
-- `.github/workflows/ralph-loop.yml` (updated — timeout alignment comment, explicit `GH_PAT` env var)
+- `.github/workflows/rl-engine.yml` (updated — timeout alignment comment, explicit `GH_PAT` env var)
 - `tests/test_workflow_monitor.py` (new — 44 tests: dataclass serialization, environment detection, API methods, health checks, loop integration, CLI integration)
 - `IMPLEMENTATION-PLAN.md` (marked Phase 2.2 ✅)
 - `README.md` (updated build status table, project structure, test count)
@@ -238,7 +238,7 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 - `SecretManager.from_environment()` reads only from `KNOWN_SECRET_ENV_VARS` (allowlisted) — unknown env vars are never captured
 - CLI validation runs before `create_provider()` — fails fast with a clear message listing which secrets are missing and what they're for, before any API key is used
 - `noop_redactor()` singleton provided for test convenience — tests that don't care about redaction can use it without creating a full `SecretManager`
-- Redactor is optional (`None` default) in Logger, Tracer, ToolExecutor, and RalphLoop — existing tests continue to work without modification
+- Redactor is optional (`None` default) in Logger, Tracer, ToolExecutor, and PipelineEngine — existing tests continue to work without modification
 **Issues hit**: Two ruff lint issues — unused imports (`Any`, `ClassVar`) in test file and unused noqa directive in secrets.py. Fixed with `make fmt`.
 **Next focus**: Phase 2.4 — Fork and Rollback Script (`scripts/setup-fork.sh` — fork a Konflux repo, roll back to before a fix commit)
 
@@ -361,12 +361,12 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 ## Run 17 — 2026-03-25
 
 **Phase**: Phase 3.5 — Report Publishing
-**What shipped**: `ReportPublisher` class and CLI entry point for generating, packaging, and publishing execution reports. Publishes report.html (interactive D3.js report), summary.md (GitHub Actions step summary), and artifact-manifest.json (file listing with config snapshot) to an output directory. Integrated into `RalphLoop._write_outputs()` so reports are generated automatically as a byproduct of every loop execution. GitHub Actions workflow updated to use the new publisher CLI (`python -m engine.visualization.publisher`) and adds an optional `publish-to-pages` job for GitHub Pages deployment gated by the `publish_to_pages` config flag. Completes Phase 3 (Visualization and Reporting).
+**What shipped**: `ReportPublisher` class and CLI entry point for generating, packaging, and publishing execution reports. Publishes report.html (interactive D3.js report), summary.md (GitHub Actions step summary), and artifact-manifest.json (file listing with config snapshot) to an output directory. Integrated into `PipelineEngine._write_outputs()` so reports are generated automatically as a byproduct of every loop execution. GitHub Actions workflow updated to use the new publisher CLI (`python -m engine.visualization.publisher`) and adds an optional `publish-to-pages` job for GitHub Pages deployment gated by the `publish_to_pages` config flag. Completes Phase 3 (Visualization and Reporting).
 **Files changed**:
 - `engine/visualization/publisher.py` (new — `ReportPublisher`, `PublishResult`, `build_summary_markdown`, `build_artifact_manifest`, CLI `main()`)
 - `engine/visualization/__init__.py` (updated — exports publisher types)
 - `engine/loop.py` (updated — `_publish_reports()` called from `_write_outputs`, lazy import for non-blocking failure)
-- `.github/workflows/ralph-loop.yml` (updated — uses `python -m engine.visualization.publisher`, adds `publish-to-pages` job with `actions/deploy-pages@v4`, adds `pages: write` + `id-token: write` permissions)
+- `.github/workflows/rl-engine.yml` (updated — uses `python -m engine.visualization.publisher`, adds `publish-to-pages` job with `actions/deploy-pages@v4`, adds `pages: write` + `id-token: write` permissions)
 - `tests/test_publisher.py` (new — 45 tests: PublishResult, build_summary_markdown, build_artifact_manifest, ReportPublisher, error handling, CLI parse_args, CLI main, loop integration)
 - `IMPLEMENTATION-PLAN.md` (marked Phase 3.5 ✅)
 - `README.md` (updated build status: Phase 3 complete, added report publishing row, updated test count)
@@ -675,7 +675,7 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 ## Run 32 — 2026-03-25
 
 **Phase**: Phase 7.2 — Metrics Counters Disconnected from Tracer (D2)
-**What shipped**: Fixed the critical bug where `LoopMetrics` LLM call/token counters always showed 0 despite actual LLM calls. Added `record_llm_call()` helper to base `Phase` class that updates both `Tracer` (action log) and `LoopMetrics` (counters) in one call. Wired `LoopMetrics` from `RalphLoop` into phase instantiation. Updated all 4 phases, golden principles checker, and fixed 8 pre-existing lint violations.
+**What shipped**: Fixed the critical bug where `LoopMetrics` LLM call/token counters always showed 0 despite actual LLM calls. Added `record_llm_call()` helper to base `Phase` class that updates both `Tracer` (action log) and `LoopMetrics` (counters) in one call. Wired `LoopMetrics` from `PipelineEngine` into phase instantiation. Updated all 4 phases, golden principles checker, and fixed 8 pre-existing lint violations.
 **Files changed**:
 - `engine/phases/base.py` — added `metrics` param to `__init__`, added `record_llm_call()` helper, fixed long lines
 - `engine/phases/triage.py` — switched to `self.record_llm_call()`
@@ -776,7 +776,7 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 ## Run 37 — 2026-03-25
 
 **Phase**: Phase 7.8 — No Live Narration / Real-time Progress (D8)
-**What shipped**: Live narration system for human-readable progress during loop execution. Added `narrate()` method to `StructuredLogger` that writes `>>> [PHASE] message` lines to stderr (visible in live GitHub Actions logs), stores narrations in an in-memory list, and continuously appends to `output/progress.md`. Added `write_progress_heading()` for markdown section headers. Wired into `RalphLoop` at all phase boundaries (start, result, escalation, transitions, completion) and into all 4 phases (triage, implement, review, validate) at every OODA step with 1-2 sentence human-readable summaries. The `progress.md` file grows incrementally with per-iteration headings and bullet-point narrations.
+**What shipped**: Live narration system for human-readable progress during loop execution. Added `narrate()` method to `StructuredLogger` that writes `>>> [PHASE] message` lines to stderr (visible in live GitHub Actions logs), stores narrations in an in-memory list, and continuously appends to `output/progress.md`. Added `write_progress_heading()` for markdown section headers. Wired into `PipelineEngine` at all phase boundaries (start, result, escalation, transitions, completion) and into all 4 phases (triage, implement, review, validate) at every OODA step with 1-2 sentence human-readable summaries. The `progress.md` file grows incrementally with per-iteration headings and bullet-point narrations.
 **Files changed**:
 - `engine/observability/logger.py` — added `narrate()`, `write_progress_heading()`, `get_narrations()`, `_append_progress()`, `progress_path` parameter
 - `engine/loop.py` — wired `progress_path`, narration at loop start/end, phase start/result, escalation, transitions, caps
@@ -822,9 +822,9 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 ## Run 39 — 2026-03-25
 
 **Phase**: Phase 7.10 — Artifact Completeness (D10)
-**What shipped**: Added `./output/log.json` and `./output/progress.md` to the "Upload execution artifacts" step in `.github/workflows/ralph-loop.yml`. These files were already produced by the engine (StructuredLogger writes log.json on flush, narration system writes progress.md during execution) but were not included in the GitHub Actions artifact upload, making them invisible to users reviewing workflow runs.
+**What shipped**: Added `./output/log.json` and `./output/progress.md` to the "Upload execution artifacts" step in `.github/workflows/rl-engine.yml`. These files were already produced by the engine (StructuredLogger writes log.json on flush, narration system writes progress.md during execution) but were not included in the GitHub Actions artifact upload, making them invisible to users reviewing workflow runs.
 **Files changed**:
-- `.github/workflows/ralph-loop.yml` — added `./output/log.json` and `./output/progress.md` to artifact upload path list
+- `.github/workflows/rl-engine.yml` — added `./output/log.json` and `./output/progress.md` to artifact upload path list
 - `tests/test_publisher.py` — added `TestArtifactCompleteness` class with 5 new tests: workflow YAML lists all expected artifact paths, loop run produces log.json, loop run produces progress.md, all core outputs exist after a run, retention days match config
 **Test result**: `make check` — 1711 passed, lint clean, golden principles PASS (20 checks, 19 files, 0 violations)
 **Decisions made**:
@@ -1020,7 +1020,7 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 
 **Date**: 2026-03-26
 **Phase**: Post-MVP — observability gap fix
-**What shipped**: Wired the existing `TranscriptWriter` into the engine so every LLM call records full system prompt, user message, and response in a live HTML transcript. Previously, the `TranscriptWriter` class existed but was never instantiated or connected — phases only logged truncated 500-char summaries via the `Tracer`. Now: (1) `RalphLoop` creates a `TranscriptWriter` at `output/transcripts/transcript.html`, (2) `Phase.record_llm_call()` accepts full `system_prompt`, `user_message`, `response` kwargs and forwards to the transcript, (3) all 6 LLM call sites across triage/implement/review/validate pass full texts, (4) CI inline logs now print full system prompt (1000 chars), user message (2000 chars), and response (3000 chars) per call, (5) `finalize()` injects an aggregate summary section into the HTML.
+**What shipped**: Wired the existing `TranscriptWriter` into the engine so every LLM call records full system prompt, user message, and response in a live HTML transcript. Previously, the `TranscriptWriter` class existed but was never instantiated or connected — phases only logged truncated 500-char summaries via the `Tracer`. Now: (1) `PipelineEngine` creates a `TranscriptWriter` at `output/transcripts/transcript.html`, (2) `Phase.record_llm_call()` accepts full `system_prompt`, `user_message`, `response` kwargs and forwards to the transcript, (3) all 6 LLM call sites across triage/implement/review/validate pass full texts, (4) CI inline logs now print full system prompt (1000 chars), user message (2000 chars), and response (3000 chars) per call, (5) `finalize()` injects an aggregate summary section into the HTML.
 **Files changed**:
 - `engine/phases/base.py` — import `TranscriptWriter`, add `transcript` param to `Phase.__init__()`, expand `record_llm_call()` to forward full texts
 - `engine/loop.py` — import and create `TranscriptWriter`, pass to phases, call `finalize()` at end
@@ -1041,7 +1041,7 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 1. **Review progressive leniency** — review phase now counts prior review iterations (`_count_prior_reviews()`), injects `PROGRESSIVE REVIEW` context into LLM prompt on 2nd+ review instructing pragmatic evaluation. `_only_nit_findings()` detects when all remaining findings are nit-severity. `reflect()` auto-upgrades `request_changes` → `approve` when only nits remain on subsequent reviews. `_summarize_prior_reviews()` gives the LLM history of what was already flagged.
 2. **Review prompt rewrite** — `templates/prompts/review.md` verdict guidelines simplified: approve is the default for working fixes, request_changes only for correctness/security issues, pragmatism section added.
 3. **Escalation threshold increase** — `escalation_on_review_block_after` raised from 3 to 5 in `LoopConfig` defaults.
-4. **Meta-loop runner script** — `scripts/meta-loop.sh`: triggers `ralph-loop.yml` via `gh workflow run`, polls for completion, downloads artifacts, analyzes `execution.json` (phase results, iteration trace, review analysis, LLM metrics, escalation diagnosis). Supports `--continuous` mode for automated iteration.
+4. **Meta-loop runner script** — `scripts/meta-loop.sh`: triggers `rl-engine.yml` via `gh workflow run`, polls for completion, downloads artifacts, analyzes `execution.json` (phase results, iteration trace, review analysis, LLM metrics, escalation diagnosis). Supports `--continuous` mode for automated iteration.
 **Files changed**:
 - `engine/phases/review.py` — added `_count_prior_reviews()`, `_only_nit_findings()`, `_summarize_prior_reviews()`, progressive review context in `plan()`, auto-approve on nit-only in `reflect()`
 - `engine/config.py` — `escalation_on_review_block_after` default 3 → 5
@@ -1187,12 +1187,12 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 **What shipped**:
 1. **Observer CLI** (`engine/observer/cli.py`) — argument parser with `--artifacts-dir` (required), `--output-dir`, `--config`, `--branch-dir`, `--templates-dir`, `--skip-signing`. Entry point: `python -m engine.observer`.
 2. **Observer pipeline** (`engine/observer/__main__.py`) — `run_observer()` wires the full pipeline: reconstruct → cross-check → build attestation → sign → evaluate policy → write outputs (attestation.json, policy-result.json, pr-comment.md, summary.txt, signing-metadata.json). `main()` returns exit codes: 0 = OK, 1 = policy failed, 2 = observer error. Helpers `_extract_triage_components()` and `_extract_issue_body()` feed scope compliance.
-3. **Workflow observer job** (`.github/workflows/ralph-loop.yml`) — new `observer` job with `needs: run-ralph-loop`, `if: always()`, permissions `id-token: write` + `contents: read` + `pull-requests: write`. Installs cosign, downloads agent artifacts, runs `python -m engine.observer`, uploads attestation artifacts, optionally posts policy result as PR comment. Agent job now exports `status` and `pr_number` outputs.
+3. **Workflow observer job** (`.github/workflows/rl-engine.yml`) — new `observer` job with `needs: run-engine`, `if: always()`, permissions `id-token: write` + `contents: read` + `pull-requests: write`. Installs cosign, downloads agent artifacts, runs `python -m engine.observer`, uploads attestation artifacts, optionally posts policy result as PR comment. Agent job now exports `status` and `pr_number` outputs.
 4. **54 new tests** (`tests/test_observer_cli.py`) covering: CLI arg parsing (11), pipeline helpers (8), run_observer full pipeline (13), main() exit codes (4), workflow YAML validation (15), end-to-end integration (4).
 **Files changed**:
 - `engine/observer/cli.py` — new: CLI argument parsing
 - `engine/observer/__main__.py` — new: observer pipeline + main() entry point
-- `.github/workflows/ralph-loop.yml` — added observer job, agent job outputs
+- `.github/workflows/rl-engine.yml` — added observer job, agent job outputs
 - `tests/test_observer_cli.py` — new: 54 tests
 - `IMPLEMENTATION-PLAN.md` — marked 8.5 ✅ with detailed description
 - `README.md` — updated observer module listing, test count, phase status, run count
@@ -1379,7 +1379,7 @@ Append-only record of every meta ralph loop run. Newest at the bottom.
 - `progress/run-log.md` — this entry
 **Test result**: `make check` — 2582 passed, 0 failed, lint clean, golden principles PASS (28 checks)
 **Decisions made**:
-- CI remediation is a sub-loop managed by `RalphLoop._run_ci_monitoring_loop()`, NOT a phase in `PHASE_ORDER`. This keeps the main pipeline clean (triage→implement→review→validate→report) while allowing CI remediation to run with independent iteration limits. The `CIRemediatePhase` is invoked directly by the sub-loop rather than by the normal phase dispatch.
+- CI remediation is a sub-loop managed by `PipelineEngine._run_ci_monitoring_loop()`, NOT a phase in `PHASE_ORDER`. This keeps the main pipeline clean (triage→implement→review→validate→report) while allowing CI remediation to run with independent iteration limits. The `CIRemediatePhase` is invoked directly by the sub-loop rather than by the normal phase dispatch.
 - The CI remediation phase uses the same tool set as implement plus `github_api` (for pushing). This gives it the ability to read files, write fixes, run shell commands, and interact with GitHub.
 - Infrastructure flakes are handled by re-triggering the workflow run, not by modifying code. Flake reruns have their own counter (`max_flake_reruns`) separate from the code remediation iteration cap.
 - The sub-loop checks both its own time budget and the main loop's time budget, ensuring the overall execution never exceeds the configured limit.

@@ -763,7 +763,7 @@ def build_ci_pr_comment(history: CIRemediationHistory) -> str:
     )
     parts.append("")
     parts.append("---")
-    parts.append("*Posted by the Ralph Loop Engine — CI Remediation Phase*")
+    parts.append("*Posted by the RL Bug Fix Engine — CI Remediation Phase*")
 
     return "\n".join(parts)
 

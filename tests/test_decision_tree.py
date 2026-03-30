@@ -193,7 +193,7 @@ class TestBuildDecisionTree:
         assert tree.id == "root"
         assert tree.node_type == "root"
         assert tree.status == "success"
-        assert tree.label == "Ralph Loop"
+        assert tree.label == "RL Engine"
 
     def test_tree_from_wrapped_execution(self):
         tree = build_decision_tree(_make_execution())
@@ -706,7 +706,7 @@ class TestReportGeneratorIntegration:
         gen = ReportGenerator()
         html = gen.generate(_make_execution())
         assert "renderDecisionTree" in html
-        assert '"Ralph Loop"' in html
+        assert '"RL Engine"' in html
 
     def test_report_data_has_decision_tree(self):
         from engine.visualization.report_generator import extract_report_data

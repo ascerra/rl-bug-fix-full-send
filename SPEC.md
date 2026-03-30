@@ -186,7 +186,7 @@ This specification defines the **production engine**. The `prompt.md` file drive
 │  ┌─── Job 1: agent ──────────────────────────────────────────┐   │
 │  │  Secrets: GEMINI_API_KEY, GH_PAT, ANTHROPIC_API_KEY       │   │
 │  │                                                            │   │
-│  │  ┌──────────────── Ralph Loop Engine ──────────────────┐  │   │
+│  │  ┌──────────────── RL Bug Fix Engine ──────────────────┐  │   │
 │  │  │  ┌─────────┐ ┌─────────┐ ┌─────────┐ ┌──────────┐ │  │   │
 │  │  │  │ Triage  │→│Implement│→│ Review  │→│ Validate │ │  │   │
 │  │  │  └─────────┘ └─────────┘ └─────────┘ └──────────┘ │  │   │
@@ -379,7 +379,7 @@ attestation:
           digest: { sha256: "<hash>" }
     runDetails:
       builder:
-        id: "https://github.com/org/rl-bug-fix-full-send/.github/workflows/ralph-loop.yml"
+        id: "https://github.com/org/rl-bug-fix-full-send/.github/workflows/rl-engine.yml"
       metadata:
         invocationId: "<workflow-run-url>"
         startedOn: "2026-03-28T10:00:00Z"
@@ -654,7 +654,7 @@ These are enforced mechanically (via linters, tests, and the loop itself):
 
 ```yaml
 # .rl-config.yaml — placed in target repo or provided at trigger time
-ralph_loop:
+loop:
   max_iterations: 10
   time_budget_minutes: 30
   escalation:

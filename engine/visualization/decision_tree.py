@@ -58,7 +58,7 @@ def build_decision_tree(execution: dict[str, Any]) -> TreeNode:
 
     root = TreeNode(
         id="root",
-        label="Ralph Loop",
+        label="RL Engine",
         node_type="root",
         status=overall_status,
         metadata={

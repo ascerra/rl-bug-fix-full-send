@@ -1072,10 +1072,10 @@ class TestImplExtraction:
 
 @pytest.mark.asyncio
 async def test_review_phase_in_loop(tmp_path):
-    """ReviewPhase can be registered and executed in RalphLoop."""
+    """ReviewPhase can be registered and executed in PipelineEngine."""
     import subprocess
 
-    from engine.loop import RalphLoop
+    from engine.loop import PipelineEngine
     from engine.phases.implement import ImplementPhase
     from engine.phases.triage import TriagePhase
 
@@ -1147,7 +1147,7 @@ async def test_review_phase_in_loop(tmp_path):
     cfg.phases.implement.run_tests_after_each_edit = False
     cfg.phases.implement.run_linters = False
 
-    loop = RalphLoop(
+    loop = PipelineEngine(
         config=cfg,
         llm=MockProvider(responses=[triage_resp, impl_resp, review_resp]),
         issue_url="https://github.com/test/repo/issues/1",

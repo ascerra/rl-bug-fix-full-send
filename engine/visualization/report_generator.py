@@ -20,6 +20,7 @@ from typing import Any
 from jinja2 import Environment, FileSystemLoader, StrictUndefined, TemplateNotFound
 
 from engine.config import ReportingConfig
+from engine.phases.base import PHASE_TOOL_SETS
 from engine.visualization.action_map import build_action_map
 from engine.visualization.comparison import build_comparison
 from engine.visualization.decision_tree import build_decision_tree
@@ -35,6 +36,29 @@ _VENDOR_FILES: dict[str, str] = {
     "three_js": "three.min.js",
     "orbit_controls_js": "orbit-controls.min.js",
     "d3_js": "d3.v7.min.js",
+}
+
+_AGENT_DESCRIPTIONS: dict[str, str] = {
+    "triage": (
+        "Analyzes the bug report, identifies root cause location, "
+        "and locates relevant source files."
+    ),
+    "implement": (
+        "Writes and applies code changes to fix the identified bug using the OODA cycle."
+    ),
+    "review": ("Reviews the implementation for correctness, style, edge cases, and completeness."),
+    "validate": ("Runs tests, creates the pull request, and validates the fix works end-to-end."),
+    "report": ("Generates the execution report with visualizations and publishes artifacts."),
+    "ci_remediate": ("Monitors CI after PR creation and automatically remediates any failures."),
+}
+
+_AGENT_ICONS: dict[str, str] = {
+    "triage": "&#x1F50D;",
+    "implement": "&#x1F6E0;",
+    "review": "&#x1F50E;",
+    "validate": "&#x2705;",
+    "report": "&#x1F4CA;",
+    "ci_remediate": "&#x1F527;",
 }
 
 
@@ -64,6 +88,7 @@ class ReportData:
     scene_data: dict[str, Any] = field(default_factory=dict)
     timeline_data: dict[str, Any] = field(default_factory=dict)
     landing_data: dict[str, Any] = field(default_factory=dict)
+    agents: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -89,6 +114,7 @@ class ReportData:
             "scene_data": self.scene_data,
             "timeline_data": self.timeline_data,
             "landing_data": self.landing_data,
+            "agents": self.agents,
         }
 
 
@@ -139,6 +165,8 @@ def extract_report_data(
 
     narrative = build_narrative(execution)
 
+    agents = _build_agents_data(phases_summary, iterations)
+
     return ReportData(
         execution_id=exec_data.get("id", ""),
         started_at=exec_data.get("started_at", ""),
@@ -162,6 +190,7 @@ def extract_report_data(
         scene_data=scene_dict,
         timeline_data=timeline_dict,
         landing_data=landing_dict,
+        agents=agents,
     )
 
 
@@ -212,6 +241,46 @@ def _build_phases_summary(
         )
 
     return summaries
+
+
+def _build_agents_data(
+    phases_summary: list[dict[str, Any]],
+    iterations: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Build per-agent metadata for the sidebar, including timing and source paths."""
+    first_started: dict[str, str] = {}
+    last_completed: dict[str, str] = {}
+    for it in iterations:
+        phase = it.get("phase", "unknown")
+        started = it.get("started_at", "")
+        completed = it.get("completed_at", "")
+        if started and (phase not in first_started or started < first_started[phase]):
+            first_started[phase] = started
+        if completed and (phase not in last_completed or completed > last_completed[phase]):
+            last_completed[phase] = completed
+
+    agents: list[dict[str, Any]] = []
+    for phase_info in phases_summary:
+        name = phase_info["phase"]
+        agents.append(
+            {
+                "name": name,
+                "display_name": name.replace("_", " ").title(),
+                "description": _AGENT_DESCRIPTIONS.get(name, ""),
+                "icon": _AGENT_ICONS.get(name, "&#x2699;"),
+                "source_file": f"engine/phases/{name}.py",
+                "prompt_file": f"templates/prompts/{name}.md",
+                "tools": PHASE_TOOL_SETS.get(name, []),
+                "status": "success" if phase_info["successful"] else "failure",
+                "duration_ms": phase_info["duration_ms"],
+                "iterations": phase_info["iterations"],
+                "llm_calls": phase_info["llm_call_count"],
+                "tool_calls": phase_info["tool_call_count"],
+                "started_at": first_started.get(name, ""),
+                "completed_at": last_completed.get(name, ""),
+            }
+        )
+    return agents
 
 
 class ReportGenerator:
@@ -372,10 +441,13 @@ class ReportGenerator:
             vendor_three = self._load_vendor_file("three_js")
             vendor_orbit = self._load_vendor_file("orbit_controls_js")
 
+        engine_repo_url = self._config.engine_repo_url
+
         return template.render(
             report=report_data,
             **report_data.to_dict(),
             visualization_engine=engine,
+            engine_repo_url=engine_repo_url,
             vendor_d3_js=vendor_d3,
             vendor_three_js=vendor_three,
             vendor_orbit_controls_js=vendor_orbit,

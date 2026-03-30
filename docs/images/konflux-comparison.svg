@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 400" font-family="Segoe UI, system-ui, sans-serif">
 
-  <text x="360" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#1e293b">KONFLUX-11443: Human Fix vs Ralph Loop</text>
+  <text x="360" y="28" text-anchor="middle" font-size="16" font-weight="700" fill="#1e293b">KONFLUX-11443: Human Fix vs RL Engine</text>
   <text x="360" y="48" text-anchor="middle" font-size="11" fill="#64748b">Race condition in fbc-fips-check-oci-ta parallel image processing</text>
 
   <!-- Header row -->
@@ -9,7 +9,7 @@
   <rect x="235" y="65" width="220" height="32" rx="6" fill="#3b82f6"/>
   <text x="345" y="86" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Human Fix (PR #3057)</text>
   <rect x="460" y="65" width="230" height="32" rx="6" fill="#8b5cf6"/>
-  <text x="575" y="86" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">Ralph Loop (2.8 min)</text>
+  <text x="575" y="86" text-anchor="middle" font-size="11" font-weight="700" fill="#fff">RL Engine (2.8 min)</text>
 
   <!-- Row 1 -->
   <rect x="30" y="100" width="200" height="30" fill="#f8fafc" stroke="#e2e8f0" stroke-width="0.5"/>
@@ -75,6 +75,6 @@
 
   <rect x="460" y="325" width="230" height="60" rx="10" fill="#8b5cf6"/>
   <text x="520" y="363" font-size="20" font-weight="800" fill="#fff">A-</text>
-  <text x="560" y="353" font-size="12" fill="#ede9fe" font-weight="600">Ralph Loop</text>
+  <text x="560" y="353" font-size="12" fill="#ede9fe" font-weight="600">RL Engine</text>
   <text x="560" y="370" font-size="10" fill="#ddd6fe">60x faster, better docs</text>
 </svg>

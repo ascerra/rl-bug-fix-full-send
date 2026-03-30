@@ -11,7 +11,7 @@ import yaml
 
 from engine.config import EngineConfig, ReportingConfig
 from engine.integrations.llm import MockProvider
-from engine.loop import RalphLoop
+from engine.loop import PipelineEngine
 from engine.visualization.publisher import (
     PublishResult,
     ReportPublisher,
@@ -771,12 +771,12 @@ class TestNarrativeInReportData:
 
 
 class TestLoopIntegration:
-    """Verify that RalphLoop._publish_reports integrates with the publisher."""
+    """Verify that PipelineEngine._publish_reports integrates with the publisher."""
 
     def test_loop_write_outputs_generates_reports(self, tmp_path):
         config = EngineConfig()
         config.loop.max_iterations = 1
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=MockProvider(),
             issue_url="https://github.com/o/r/issues/1",
@@ -797,7 +797,7 @@ class TestLoopIntegration:
 
         config = EngineConfig()
         config.loop.max_iterations = 1
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=MockProvider(),
             issue_url="https://github.com/o/r/issues/1",
@@ -813,7 +813,7 @@ class TestLoopIntegration:
 
     def test_publish_reports_failure_does_not_crash_loop(self, tmp_path):
         config = EngineConfig()
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=MockProvider(),
             issue_url="https://github.com/o/r/issues/1",
@@ -1058,7 +1058,7 @@ class TestSummaryFindingsRendering:
 # ---------------------------------------------------------------------------
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "ralph-loop.yml"
+WORKFLOW_PATH = REPO_ROOT / ".github" / "workflows" / "rl-engine.yml"
 
 EXPECTED_ARTIFACT_PATHS = [
     "./output/execution.json",
@@ -1079,7 +1079,7 @@ class TestArtifactCompleteness:
         wf = yaml.safe_load(raw)
         upload_steps = [
             step
-            for step in wf["jobs"]["run-ralph-loop"]["steps"]
+            for step in wf["jobs"]["run-engine"]["steps"]
             if step.get("name", "").startswith("Upload execution artifacts")
         ]
         assert len(upload_steps) == 1, "Expected exactly one 'Upload execution artifacts' step"
@@ -1093,7 +1093,7 @@ class TestArtifactCompleteness:
 
         config = EngineConfig()
         config.loop.max_iterations = 1
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=MockProvider(),
             issue_url="https://github.com/o/r/issues/1",
@@ -1112,7 +1112,7 @@ class TestArtifactCompleteness:
 
         config = EngineConfig()
         config.loop.max_iterations = 1
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=MockProvider(),
             issue_url="https://github.com/o/r/issues/1",
@@ -1122,7 +1122,7 @@ class TestArtifactCompleteness:
         asyncio.run(loop.run())
         assert (tmp_path / "output" / "progress.md").exists()
         content = (tmp_path / "output" / "progress.md").read_text()
-        assert "Ralph Loop" in content
+        assert "RL Engine" in content
 
     def test_loop_run_produces_all_core_outputs(self, tmp_path):
         """Every core output file must exist after a loop run."""
@@ -1130,7 +1130,7 @@ class TestArtifactCompleteness:
 
         config = EngineConfig()
         config.loop.max_iterations = 1
-        loop = RalphLoop(
+        loop = PipelineEngine(
             config=config,
             llm=MockProvider(),
             issue_url="https://github.com/o/r/issues/1",
@@ -1154,7 +1154,7 @@ class TestArtifactCompleteness:
         wf = yaml.safe_load(raw)
         upload_steps = [
             step
-            for step in wf["jobs"]["run-ralph-loop"]["steps"]
+            for step in wf["jobs"]["run-engine"]["steps"]
             if step.get("name", "").startswith("Upload execution artifacts")
         ]
         retention = upload_steps[0]["with"]["retention-days"]

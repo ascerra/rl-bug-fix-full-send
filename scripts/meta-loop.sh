@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Meta Ralph Loop — Production Engine CI Runner
 #
-# Triggers the ralph-loop.yml workflow in GitHub Actions, monitors the run,
+# Triggers the rl-engine.yml workflow in GitHub Actions, monitors the run,
 # downloads artifacts, and analyzes the results. This IS the Ralph Loop —
 # the iterative development methodology that builds and maintains the
 # production engine. Designed to be run repeatedly:
@@ -133,7 +133,7 @@ echo "  Output dir:   $OUTPUT_DIR"
 echo ""
 
 trigger_workflow() {
-  echo "▸ Triggering ralph-loop.yml workflow..."
+  echo "▸ Triggering rl-engine.yml workflow..."
 
   local ARGS=()
   ARGS+=(-f "issue_url=$ISSUE_URL")
@@ -145,7 +145,7 @@ trigger_workflow() {
     ARGS+=(-f "config_override=$CONFIG_OVERRIDE")
   fi
 
-  gh workflow run ralph-loop.yml \
+  gh workflow run rl-engine.yml \
     --repo "$REPO" \
     --ref "$REF" \
     "${ARGS[@]}"
@@ -156,7 +156,7 @@ trigger_workflow() {
   # Get the run ID of the most recent run
   RUN_ID=$(gh run list \
     --repo "$REPO" \
-    --workflow ralph-loop.yml \
+    --workflow rl-engine.yml \
     --limit 1 \
     --json databaseId \
     --jq '.[0].databaseId')

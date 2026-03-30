@@ -374,7 +374,7 @@ class TestReportGenerator:
         gen = ReportGenerator()
         html = gen.generate(_make_execution())
         assert "<!DOCTYPE html>" in html
-        assert "Ralph Loop Execution Report" in html
+        assert "RL Engine Execution Report" in html
 
     def test_generate_contains_execution_id(self):
         gen = ReportGenerator()
@@ -433,7 +433,7 @@ class TestReportGenerator:
         exec_json.write_text(json.dumps(_make_execution()), encoding="utf-8")
         gen = ReportGenerator()
         html = gen.generate_from_file(exec_json)
-        assert "Ralph Loop Execution Report" in html
+        assert "RL Engine Execution Report" in html
 
     def test_generate_from_file_writes_output(self, tmp_path):
         exec_json = tmp_path / "execution.json"
@@ -538,7 +538,7 @@ class TestIntegration:
         assert "implement" in content
 
     def test_loop_execution_record_format(self):
-        """Verify generator handles the dict shape from RalphLoop._write_outputs."""
+        """Verify generator handles the dict shape from PipelineEngine._write_outputs."""
         exec_record = {
             "execution": {
                 "id": "abc-123",

@@ -1,4 +1,4 @@
-name: Ralph Loop - Bug Fix Engine
+name: RL Bug Fix Engine
 
 on:
   workflow_dispatch:
@@ -46,8 +46,8 @@ env:
   PYTHON_VERSION: "3.12"
 
 jobs:
-  run-ralph-loop:
-    name: Execute Ralph Loop
+  run-engine:
+    name: Execute RL Engine
     runs-on: ubuntu-latest
     timeout-minutes: 45
     outputs:
@@ -98,7 +98,7 @@ jobs:
           git config user.email "rl-engine@ascerra.dev"
           git config user.name "RL Bug Fix Engine"
 
-      - name: Run Ralph Loop Engine
+      - name: Run RL Engine
         id: loop
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
@@ -131,7 +131,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ralph-loop-execution-${{ github.run_id }}
+          name: rl-engine-execution-${{ github.run_id }}
           path: |
             ./output/execution.json
             ./output/log.json
@@ -145,7 +145,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: ralph-loop-reports-${{ github.run_id }}
+          name: rl-engine-reports-${{ github.run_id }}
           path: ./output/reports/
           retention-days: 30
 
@@ -153,7 +153,7 @@ jobs:
         if: always()
         run: |
           STATUS="${{ steps.loop.outputs.status }}"
-          echo "## Ralph Loop Execution Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "## RL Engine Execution Summary" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Issue**: ${{ inputs.issue_url }}" >> "$GITHUB_STEP_SUMMARY"
           echo "**Status**: ${STATUS:-unknown}" >> "$GITHUB_STEP_SUMMARY"
@@ -167,7 +167,7 @@ jobs:
 
   observer:
     name: Neutral Observer
-    needs: run-ralph-loop
+    needs: run-engine
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -197,7 +197,7 @@ jobs:
       - name: Download agent artifacts
         uses: actions/download-artifact@v4
         with:
-          name: ralph-loop-execution-${{ github.run_id }}
+          name: rl-engine-execution-${{ github.run_id }}
           path: ./agent-artifacts
 
       - name: Run observer
@@ -223,12 +223,12 @@ jobs:
           retention-days: 30
 
       - name: Post policy result to PR
-        if: needs.run-ralph-loop.outputs.pr_number != ''
+        if: needs.run-engine.outputs.pr_number != ''
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          PR_NUM="${{ needs.run-ralph-loop.outputs.pr_number }}"
-          REPO="${{ needs.run-ralph-loop.outputs.repo }}"
+          PR_NUM="${{ needs.run-engine.outputs.pr_number }}"
+          REPO="${{ needs.run-engine.outputs.repo }}"
           if [ -n "$PR_NUM" ] && [ -f ./attestation/pr-comment.md ]; then
             gh pr comment "$PR_NUM" --repo "$REPO" --body-file ./attestation/pr-comment.md || true
           fi

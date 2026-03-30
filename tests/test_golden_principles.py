@@ -569,14 +569,14 @@ class TestCheckToolExecutionTracing:
 
 
 class TestCheckIterationBounds:
-    """GP005: RalphLoop.run() must check max_iterations and time_budget."""
+    """GP005: PipelineEngine.run() must check max_iterations and time_budget."""
 
     def test_compliant_loop(self, tmp_path):
         _write_engine_file(
             tmp_path,
             "loop.py",
             """
-            class RalphLoop:
+            class PipelineEngine:
                 async def run(self):
                     if self._total_iterations >= self.config.loop.max_iterations:
                         pass
@@ -594,7 +594,7 @@ class TestCheckIterationBounds:
             tmp_path,
             "loop.py",
             """
-            class RalphLoop:
+            class PipelineEngine:
                 async def run(self):
                     if self._check_time_budget():
                         pass
@@ -611,7 +611,7 @@ class TestCheckIterationBounds:
             tmp_path,
             "loop.py",
             """
-            class RalphLoop:
+            class PipelineEngine:
                 async def run(self):
                     if self._total_iterations >= self.config.loop.max_iterations:
                         pass
@@ -625,14 +625,14 @@ class TestCheckIterationBounds:
 
 
 class TestCheckReportPublishing:
-    """GP009: RalphLoop._write_outputs() must trigger report generation."""
+    """GP009: PipelineEngine._write_outputs() must trigger report generation."""
 
     def test_compliant_loop(self, tmp_path):
         _write_engine_file(
             tmp_path,
             "loop.py",
             """
-            class RalphLoop:
+            class PipelineEngine:
                 def _write_outputs(self, status):
                     self._publish_reports()
             """,
@@ -646,7 +646,7 @@ class TestCheckReportPublishing:
             tmp_path,
             "loop.py",
             """
-            class RalphLoop:
+            class PipelineEngine:
                 def _write_outputs(self, status):
                     with open("status.txt") as f:
                         f.write(status)
@@ -662,7 +662,7 @@ class TestCheckReportPublishing:
             tmp_path,
             "loop.py",
             """
-            class RalphLoop:
+            class PipelineEngine:
                 async def run(self):
                     pass
             """,
@@ -762,7 +762,7 @@ class TestCheckAll:
             tmp_path,
             "loop.py",
             """
-            class RalphLoop:
+            class PipelineEngine:
                 async def run(self):
                     if self._total_iterations >= self.config.loop.max_iterations:
                         pass
